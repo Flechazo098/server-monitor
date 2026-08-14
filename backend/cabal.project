@@ -1,0 +1,6 @@
+packages: .
+
+optimization: 1
+
+package monitor-backend
+  ghc-options: -Wall -Wno-name-shadowing
