@@ -3,21 +3,19 @@ import { onMounted, ref } from 'vue'
 import { apiGet, getBackendInfo } from '../api/client'
 import { useServersStore } from '../stores/servers'
 import Panel from '../components/Panel.vue'
-import type { HealthInfo } from '../types'
+import { HealthInfoSchema, type HealthInfo } from '../types'
 
 const store = useServersStore()
 const port = ref<number | null>(null)
-const token = ref('')
 const mode = ref<'tauri' | 'browser'>('browser')
 const health = ref<HealthInfo | null>(null)
 
 onMounted(async () => {
-  const info = await getBackendInfo()
-  port.value = info.port
-  token.value = info.token
   mode.value = window.__TAURI_INTERNALS__ ? 'tauri' : 'browser'
   try {
-    health.value = await apiGet<HealthInfo>('/api/health')
+    const info = await getBackendInfo()
+    port.value = info.port
+    health.value = await apiGet('/api/health', HealthInfoSchema)
   } catch {
     health.value = null
   }
@@ -40,11 +38,11 @@ onMounted(async () => {
           <div class="kv-row"><span class="k">Address</span><span class="v">{{ port != null ? '127.0.0.1:' + port : '—' }}</span></div>
           <div class="kv-row"><span class="k">API health</span><span class="v">{{ health ? 'ok (' + health.online + '/' + health.servers + ' online)' : 'unreachable' }}</span></div>
         </div>
-        <p class="faint" style="font-size: 11.5px; margin-top: 12px; line-height: 1.6">
-          The backend binds only to loopback and is started/stopped by the Tauri
-          shell. Every request carries an <code class="mono">Authorization: Bearer</code> header.
-          WebSocket frames are read-only metric pushes.
-        </p>
+        <div class="policy-note kv">
+          <div class="kv-row"><span class="k">Bind scope</span><span class="v ok-text">loopback only</span></div>
+          <div class="kv-row"><span class="k">REST auth</span><span class="v">Bearer token</span></div>
+          <div class="kv-row"><span class="k">WebSocket auth</span><span class="v">session token</span></div>
+        </div>
       </Panel>
 
       <Panel title="Monitoring policy">
@@ -57,26 +55,31 @@ onMounted(async () => {
     </div>
 
     <div class="grid-2" style="margin-top: 12px">
-      <Panel title="Alert thresholds (config.json → alerts)">
-        <div class="kv">
-          <div class="kv-row"><span class="k">Disk usage</span><span class="v">> 80% (critical)</span></div>
-          <div class="kv-row"><span class="k">Memory</span><span class="v">> 90% (critical)</span></div>
-          <div class="kv-row"><span class="k">CPU sustained</span><span class="v">> 85% for 180s (warning)</span></div>
-          <div class="kv-row"><span class="k">TLS expiry</span><span class="v">< 30 days (warning)</span></div>
-          <div class="kv-row"><span class="k">Health check</span><span class="v">≥ 3 consecutive failures (critical)</span></div>
-          <div class="kv-row"><span class="k">Backup age</span><span class="v">> 26h (critical)</span></div>
-          <div class="kv-row"><span class="k">Re-alert cooldown</span><span class="v">3600s</span></div>
+      <Panel title="Alert thresholds · active configuration">
+        <div v-if="health" class="kv">
+          <div class="kv-row"><span class="k">Disk usage</span><span class="v">≥ {{ health.alerts.diskPct }}% · critical</span></div>
+          <div class="kv-row"><span class="k">Memory</span><span class="v">≥ {{ health.alerts.memPct }}% · critical</span></div>
+          <div class="kv-row"><span class="k">CPU sustained</span><span class="v">≥ {{ health.alerts.cpuPct }}% for {{ health.alerts.cpuSustainSec }}s · warning</span></div>
+          <div class="kv-row"><span class="k">TLS expiry</span><span class="v">&lt; {{ health.alerts.tlsMinDays }} days · warning</span></div>
+          <div class="kv-row"><span class="k">Health check</span><span class="v">{{ health.alerts.healthMaxFails }} consecutive failures · critical</span></div>
+          <div class="kv-row"><span class="k">Backup age</span><span class="v">≥ {{ health.alerts.backupMaxAgeHours }}h · critical</span></div>
+          <div class="kv-row"><span class="k">Re-alert cooldown</span><span class="v">{{ health.alerts.cooldownSec }}s</span></div>
         </div>
+        <div v-else class="loading"><span class="spinner" /> loading policy…</div>
       </Panel>
 
-      <Panel title="Read-only by design">
-        <p class="dim" style="font-size: 12.5px; line-height: 1.7">
-          This monitor exposes GET endpoints only. There is no remote shell, no
-          command execution endpoint, and no way to mutate the monitored servers
-          from the UI. Every collection runs a fixed, embedded read-only script
-          over SSH; credentials and secrets never leave the local config and are
-          never written to the database or logs.
-        </p>
+      <Panel title="Collection policy · active configuration">
+        <div v-if="health" class="kv">
+          <div class="kv-row"><span class="k">Inventory sample</span><span class="v">{{ health.collection.fullIntervalSec }}s</span></div>
+          <div class="kv-row"><span class="k">SSH timeout</span><span class="v">{{ health.collection.timeoutSec }}s</span></div>
+          <div class="kv-row"><span class="k">Failure backoff cap</span><span class="v">{{ health.collection.backoffMaxSec }}s</span></div>
+          <div class="kv-row"><span class="k">History retention</span><span class="v">{{ health.collection.retentionDays }} days</span></div>
+        </div>
+        <div class="policy-note kv">
+          <div class="kv-row"><span class="k">API surface</span><span class="v ok-text">GET only</span></div>
+          <div class="kv-row"><span class="k">Remote mutation</span><span class="v ok-text">disabled</span></div>
+          <div class="kv-row"><span class="k">Credential logging</span><span class="v ok-text">disabled</span></div>
+        </div>
       </Panel>
     </div>
   </div>

@@ -8,6 +8,7 @@
 -- whole collection.
 module Monitor.Collector.Parse
   ( Parsed (..)
+  , MetricsTick (..)
   , emptyParsed
   , parseBatch
   , parseMetricsTick
@@ -21,7 +22,7 @@ import Data.Char (isDigit)
 import Data.List (find, foldl')
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
-import Data.Maybe (fromMaybe, isJust, isNothing, listToMaybe, mapMaybe)
+import Data.Maybe (catMaybes, fromMaybe, isJust, isNothing, listToMaybe, mapMaybe)
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
@@ -61,6 +62,16 @@ data Parsed = Parsed
   , pBackup       :: Maybe BackupInfo
   , pHealth       :: [HealthCheck]
   , pErrors       :: Map Text Text
+  }
+  deriving (Show)
+
+data MetricsTick = MetricsTick
+  { mtMetrics    :: Maybe Metrics
+  , mtNetIfaces  :: [NetIface]
+  , mtVnstatDays :: [VnstatDay]
+  , mtCaddy      :: Maybe CaddyLogs
+  , mtHealth     :: [HealthCheck]
+  , mtErrors     :: Map Text Text
   }
   deriving (Show)
 
@@ -105,6 +116,13 @@ parseDouble t =
 -- | Parse an integer prefix, ignoring any trailing unit or punctuation.
 parseInt :: Text -> Maybe Int
 parseInt t =
+  let num = T.takeWhile isDigit (T.strip t)
+  in case TR.decimal num of
+       Right (v, _) -> Just v
+       _ -> Nothing
+
+parseInteger :: Text -> Maybe Integer
+parseInteger t =
   let num = T.takeWhile isDigit (T.strip t)
   in case TR.decimal num of
        Right (v, _) -> Just v
@@ -206,9 +224,11 @@ vnstatRow l = do
           rxUnit = ws0 !! (length ws0 - 1)
           txTok = head ws1
           txUnit = ws1 !! 1
-      in if T.any isDigit date && isSizeUnit rxUnit && isSizeUnit txUnit
+      in if validDate date && isSizeUnit rxUnit && isSizeUnit txUnit
            then Just (date, parseSize (rxTok <> rxUnit), parseSize (txTok <> txUnit))
            else Nothing
+  where
+    validDate date = T.any isDigit date || T.toLower date `elem` ["today", "yesterday"]
 
 -- | Last month row of vnstat -m.
 vnstatMonth :: Text -> (Integer, Integer)
@@ -228,28 +248,29 @@ headOr _ (x : _) = x
 
 parseNetIfaces :: Text -> [NetIface]
 parseNetIfaces t =
-  [ NetIface name (fromIntegral rx) (fromIntegral tx)
+  [ NetIface name rx tx
   | l <- T.lines t
   , let parts = T.splitOn "|" (T.strip l)
   , length parts >= 3
   , let name = T.strip (head parts)
   , not (T.null name)
-  , Just rx <- [parseInt (parts !! 1)]
-  , Just tx <- [parseInt (parts !! 2)]
+  , Just rx <- [parseInteger (parts !! 1)]
+  , Just tx <- [parseInteger (parts !! 2)]
   ]
 
 parseDisks :: Text -> [DiskMount]
 parseDisks t =
-  [ DiskMount fs size used avail pct mount
+  [ DiskMount fs fsType size used avail pct mount
   | l <- T.lines t
   , let parts = T.splitOn "|" (T.strip l)
-  , length parts >= 6
+  , length parts >= 7
   , let fs = head parts
-  , let size = parts !! 1
-  , let used = parts !! 2
-  , let avail = parts !! 3
-  , let mount = T.intercalate "|" (drop 5 parts)
-  , Just pct <- [parseDouble (parts !! 4)]
+  , let fsType = parts !! 1
+  , let size = parts !! 2
+  , let used = parts !! 3
+  , let avail = parts !! 4
+  , let mount = T.intercalate "|" (drop 6 parts)
+  , Just pct <- [parseDouble (parts !! 5)]
   ]
 
 parseTls :: Text -> UTCTime -> (Map Text Text, [TlsCert])
@@ -308,14 +329,14 @@ parseNotAfter raw = do
 
 parseFingerprints :: Text -> [Fingerprint]
 parseFingerprints t =
-  [ Fingerprint file algo algoTok
+  [ Fingerprint file algo hash
   | l <- T.lines t
-  , let ws = T.words (T.strip l)
-  , length ws >= 3
-  , let algoTok = ws !! 1
-  , ":" `T.isInfixOf` algoTok
-  , let algo = T.takeWhile (/= ':') algoTok
-  , let file = T.intercalate " " (drop 2 ws)
+  , let parts = map T.strip (T.splitOn "|" l)
+  , length parts >= 3
+  , let file = head parts
+  , let hash = parts !! 1
+  , "SHA256:" `T.isPrefixOf` hash
+  , let algo = T.dropAround (`elem` ("()" :: String)) (parts !! 2)
   , not (T.null file)
   ]
 
@@ -364,9 +385,9 @@ parseSshLogins t = mapMaybe mkLogin (T.lines t)
 
 parseFirewall :: Text -> Maybe Firewall
 parseFirewall t =
-  let ufwBlock = block "--UFW--" "--IPTABLES--" t
-      iptBlock = block "--IPTABLES--" "--UFWREJECT--" t
-      rejectBlock = block "--UFWREJECT--" "--" t
+  let ufwBlock = block "--UFW--" (Just "--IPTABLES--") t
+      iptBlock = block "--IPTABLES--" (Just "--UFWREJECT--") t
+      rejectBlock = block "--UFWREJECT--" Nothing t
       active = "Status: active" `T.isInfixOf` ufwBlock
       rules = mapMaybe ufwRule (T.lines ufwBlock)
       ipt = mapMaybe iptRule (T.lines iptBlock ++ T.lines rejectBlock)
@@ -374,12 +395,14 @@ parseFirewall t =
        then Nothing
        else Just (Firewall active rules ipt)
   where
-    block from to s =
+    block from mTo s =
       let after = snd (T.breakOn from s)
-          linesAfter = T.lines after
+          linesAfter = drop 1 (T.lines after)
       in if T.null after
            then ""
-           else T.unlines (takeWhile (not . T.isPrefixOf to . T.strip) linesAfter)
+           else T.unlines (case mTo of
+             Just to -> takeWhile (not . T.isPrefixOf to . T.strip) linesAfter
+             Nothing -> linesAfter)
     ufwRule l =
       let cols = map T.strip (filter (not . T.null) (T.splitOn "  " (T.strip l)))
           norm a = case T.words a of
@@ -490,32 +513,28 @@ parseGitea t =
                    then (head ints, ints !! 1, ints !! 2, ints !! 3)
                    else (Nothing, Nothing, Nothing, Nothing)
             [] -> (Nothing, Nothing, Nothing, Nothing)
-          (repos, users, activeWeek, lastPush) = stats
-      in if isNothing health && all isNothing [repos, users, activeWeek, lastPush]
+          (repos, users, activeWeek, lastActivity) = stats
+      in if isNothing health && all isNothing [repos, users, activeWeek, lastActivity]
            then Nothing
            else Just GiteaInfo
              { giHealth = health
              , giRepos = repos
              , giUsers = users
              , giActiveWeek = activeWeek
-             , giLastPush = lastPush
+             , giLastActivity = lastActivity
              }
 
 parseCaddy :: Text -> Maybe CaddyLogs
 parseCaddy t =
   case [T.strip l | l <- T.lines t, not (T.null (T.strip l))] of
     [] -> Nothing
-    (statLine : rest) ->
+    (statLine : _) ->
       let parts = T.splitOn "|" statLine
       in case (parseInt (headOr "" parts), parseInt (headOr "" (drop 1 parts))) of
            (Just size, Just epoch) ->
-             let linesCount = case rest of
-                   (l : _) -> parseInt l
-                   [] -> Nothing
-             in Just CaddyLogs
-               { clSizeBytes = fromIntegral size
-               , clLines = linesCount
-               , clMtime = posixSecondsToUTCTime (fromIntegral epoch)
+              Just CaddyLogs
+                { clSizeBytes = fromIntegral size
+                , clMtime = posixSecondsToUTCTime (fromIntegral epoch)
                , clGrowthBps = 0
                }
            _ -> Nothing
@@ -523,9 +542,14 @@ parseCaddy t =
 parseBackup :: Text -> Maybe BackupInfo
 parseBackup t =
   let ls = [T.strip l | l <- T.lines t, not (T.null (T.strip l))]
-      count = listToMaybe ls >>= parseInt
-      epoch = listToMaybe (drop 1 ls) >>= parseInt
-      rest = drop 2 ls
+      value key = listToMaybe
+        [ T.strip (T.drop (T.length key + 1) l)
+        | l <- ls
+        , (key <> "=") `T.isPrefixOf` l
+        ]
+      count = value "count" >>= parseInt
+      epoch = value "newestEpoch" >>= parseInt
+      rest = ls
       lastLine = listToMaybe
         [ T.strip (T.drop (T.length "LastTriggerUSec=") l)
         | l <- rest
@@ -538,9 +562,9 @@ parseBackup t =
         , "NextElapseUSecRealtime=" `T.isPrefixOf` l
         , "n/a" `T.isInfixOf` l || not (T.null (T.strip (T.drop (T.length "NextElapseUSecRealtime=") l)))
         ]
-      failedLine = find (`elem` ["failed", "active", "inactive", "unknown"]) rest
-      failed = fmap (== "failed") failedLine
-  in if T.null t || (isNothing count && isNothing epoch)
+      serviceState = value "serviceState"
+      failed = fmap (== "failed") serviceState
+  in if T.null t || (isNothing count && isNothing epoch && isNothing serviceState)
        then Nothing
        else Just BackupInfo
          { bkLastRun = lastLine
@@ -592,13 +616,18 @@ parseFail2ban t =
         in case [l | l <- body, key `T.isInfixOf` l] of
              (l : _) -> fromMaybe 0 (parseInt (T.strip (T.drop 1 (T.dropWhile (/= ':') l))))
              [] -> 0
-  in [ Fail2banJail n (getVal "Currently banned:" (seg n)) (getVal "Total banned:" (seg n))
+      getIps seg' =
+        case [l | l <- drop 1 seg', "Banned IP list:" `T.isInfixOf` l] of
+          (l : _) -> T.words (T.strip (T.drop 1 (T.dropWhile (/= ':') l)))
+          [] -> []
+  in [ Fail2banJail n (getVal "Currently banned:" jail) (getVal "Total banned:" jail) (getIps jail)
      | n <- jailNames
+     , let jail = seg n
      ]
 
 parseHealth :: Text -> [HealthCheck]
 parseHealth t =
-  [ HealthCheck url (code == "200") ms code
+  [ HealthCheck url (isHealthy code) ms code
   | l <- T.lines t
   , let ws = T.words l
   , length ws >= 3
@@ -608,6 +637,45 @@ parseHealth t =
   , T.length code == 3
   , let ms = round (fromMaybe 0 (parseDouble (ws !! 2)) * 1000)
   ]
+  where
+    isHealthy code = case parseInt code of
+      Just n -> n >= 200 && n < 400
+      Nothing -> False
+
+metricsFromSections :: UTCTime -> Map Text Text -> Maybe Metrics
+metricsFromSections now secs
+  | T.null uptime = Nothing
+  | otherwise = Just Metrics
+      { mCpu = cpuAt 0
+      , mCpuUser = cpuAt 1
+      , mCpuSystem = cpuAt 2
+      , mCpuIowait = cpuAt 3
+      , mMemUsedPct = memDoubleAt 0
+      , mMemAvailableBytes = memIntegerAt 1
+      , mMemCacheBytes = memIntegerAt 2
+      , mMemBuffersBytes = memIntegerAt 3
+      , mSwapUsedBytes = memIntegerAt 4
+      , mSwapTotalBytes = memIntegerAt 5
+      , mLoad1 = l1
+      , mLoad5 = l5
+      , mLoad15 = l15
+      , mUptimeSec = fromMaybe 0 (parseInt uptime)
+      , mDiskUsedPct = fromMaybe 0 (parseDouble (headOr "0" (T.lines (getSec secs "DISK"))))
+      , mRxBytes = todayRx
+      , mTxBytes = todayTx
+      , mRxRate = 0
+      , mTxRate = 0
+      , mTimestamp = now
+      }
+  where
+    uptime = getSec secs "UPTIME"
+    cpuParts = T.splitOn "|" (headOr "" (T.lines (getSec secs "CPU")))
+    memParts = T.splitOn "|" (headOr "" (T.lines (getSec secs "MEM")))
+    cpuAt i = fromMaybe 0 (listToMaybe (drop i cpuParts) >>= parseDouble)
+    memDoubleAt i = fromMaybe 0 (listToMaybe (drop i memParts) >>= parseDouble)
+    memIntegerAt i = fromMaybe 0 (listToMaybe (drop i memParts) >>= parseInteger)
+    (l1, l5, l15) = loads (getSec secs "LOAD")
+    (todayRx, todayTx) = vnstatToday now (getSec secs "VNSTATD")
 
 -- ---------------------------------------------------------------------------
 -- Batch assembly
@@ -617,50 +685,55 @@ parseHealth t =
 parseBatch :: ServerConfig -> UTCTime -> Text -> Parsed
 parseBatch _cfg now out =
   let (secs, errs) = sections out
-      (todayRx, todayTx) = vnstatToday now (getSec secs "VNSTATD")
       (monthRx, monthTx) = vnstatMonth (getSec secs "VNSTATM")
-      (l1, l5, l15) = loads (getSec secs "LOAD")
       (tlsErrs, tlsCerts) = parseTls (getSec secs "TLS") now
-      metrics =
-        if T.null (getSec secs "UPTIME") && T.null (getSec secs "CPU") && T.null (getSec secs "MEM")
-          then Nothing
-          else Just Metrics
-            { mCpu = fromMaybe 0 (parseDouble (headOr "0" (T.lines (getSec secs "CPU"))))
-            , mMemUsedPct = fromMaybe 0 (parseDouble (headOr "0" (T.lines (getSec secs "MEM"))))
-            , mLoad1 = l1
-            , mLoad5 = l5
-            , mLoad15 = l15
-            , mUptimeSec = fromMaybe 0 (parseInt (getSec secs "UPTIME"))
-            , mDiskUsedPct = fromMaybe 0 (parseDouble (headOr "0" (T.lines (getSec secs "DISK"))))
-            , mRxBytes = todayRx
-            , mTxBytes = todayTx
-            , mRxRate = 0
-            , mTxRate = 0
-            , mTimestamp = now
-            }
+      disks = parseDisks (getSec secs "DISKMOUNTS")
+      dockerUsage = parseDockerDf (getSec secs "DOCKERDF")
+      apt = parseApt (getSec secs "APT")
+      firewall = parseFirewall (getSec secs "FIREWALL")
+      m3u8 = parseM3u8 (getSec secs "M3U8")
+      gitea = parseGitea (getSec secs "GITEA")
+      caddy = parseCaddy (getSec secs "CADDY")
+      backup = parseBackup (getSec secs "BACKUP")
+      parserErrors = Map.fromList (catMaybes
+        [ invalidList "DISKMOUNTS" disks
+        , invalidMaybe "DOCKERDF" dockerUsage
+        , invalidMaybe "APT" apt
+        , invalidMaybe "FIREWALL" firewall
+        , invalidMaybe "M3U8" m3u8
+        , invalidMaybe "GITEA" gitea
+        , invalidMaybe "CADDY" caddy
+        , invalidMaybe "BACKUP" backup
+        ])
+      invalidList key value
+        | T.null (T.strip (getSec secs key)) || not (null value) = Nothing
+        | otherwise = Just (key, "unrecognized output")
+      invalidMaybe key value
+        | T.null (T.strip (getSec secs key)) || isJust value = Nothing
+        | otherwise = Just (key, "unrecognized output")
   in emptyParsed
-    { pMetrics = metrics
-    , pDisks = parseDisks (getSec secs "DISKMOUNTS")
-    , pDockerUsage = parseDockerDf (getSec secs "DOCKERDF")
-    , pApt = parseApt (getSec secs "APT")
+    { pMetrics = metricsFromSections now secs
+    , pDisks = disks
+    , pDockerUsage = dockerUsage
+    , pApt = apt
     , pTlsCerts = tlsCerts
     , pPorts = parsePorts (getSec secs "PORTS")
     , pSshLogins = parseSshLogins (getSec secs "SSHAUTH")
-    , pFirewall = parseFirewall (getSec secs "FIREWALL")
+    , pFirewall = firewall
     , pVnstatDays = parseVnstatDays (getSec secs "VNSTATD")
     , pMonthRx = monthRx
     , pMonthTx = monthTx
     , pNetIfaces = parseNetIfaces (getSec secs "NETDEV")
     , pFingerprints = parseFingerprints (getSec secs "FINGERPRINTS")
-    , pM3u8 = parseM3u8 (getSec secs "M3U8")
-    , pGitea = parseGitea (getSec secs "GITEA")
-    , pCaddy = parseCaddy (getSec secs "CADDY")
+    , pM3u8 = m3u8
+    , pGitea = gitea
+    , pCaddy = caddy
     , pContainers = parseContainers (getSec secs "CONTAINERS") (getSec secs "STATS")
     , pServices = parseServices (getSec secs "SERVICES")
     , pFail2ban = parseFail2ban (getSec secs "F2B")
-    , pBackup = parseBackup (getSec secs "BACKUP")
+    , pBackup = backup
     , pHealth = parseHealth (getSec secs "HEALTH")
-    , pErrors = Map.union tlsErrs errs
+    , pErrors = Map.unions [errs, tlsErrs, parserErrors]
     }
 
 parseVnstatDays :: Text -> [VnstatDay]
@@ -670,35 +743,17 @@ parseVnstatDays t =
   ]
 
 -- | Parse the output of the light metrics script.
-parseMetricsTick :: UTCTime -> Text -> (Maybe Metrics, [NetIface], [VnstatDay], Maybe CaddyLogs, Map Text Text)
+parseMetricsTick :: UTCTime -> Text -> MetricsTick
 parseMetricsTick now out =
   let (secs, errs) = sections out
-      (todayRx, todayTx) = vnstatToday now (getSec secs "VNSTATD")
-      (l1, l5, l15) = loads (getSec secs "LOAD")
-      ifaces = parseNetIfaces (getSec secs "NETDEV")
-      metrics =
-        if T.null (getSec secs "UPTIME")
-          then Nothing
-          else Just Metrics
-            { mCpu = fromMaybe 0 (parseDouble (headOr "0" (T.lines (getSec secs "CPU"))))
-            , mMemUsedPct = fromMaybe 0 (parseDouble (headOr "0" (T.lines (getSec secs "MEM"))))
-            , mLoad1 = l1
-            , mLoad5 = l5
-            , mLoad15 = l15
-            , mUptimeSec = fromMaybe 0 (parseInt (getSec secs "UPTIME"))
-            , mDiskUsedPct = fromMaybe 0 (parseDouble (headOr "0" (T.lines (getSec secs "DISK"))))
-            , mRxBytes = todayRx
-            , mTxBytes = todayTx
-            , mRxRate = 0
-            , mTxRate = 0
-            , mTimestamp = now
-            }
-  in ( metrics
-     , ifaces
-     , parseVnstatDays (getSec secs "VNSTATD")
-     , parseCaddy (getSec secs "CADDY")
-     , errs
-     )
+  in MetricsTick
+     { mtMetrics = metricsFromSections now secs
+     , mtNetIfaces = parseNetIfaces (getSec secs "NETDEV")
+     , mtVnstatDays = parseVnstatDays (getSec secs "VNSTATD")
+     , mtCaddy = parseCaddy (getSec secs "CADDY")
+     , mtHealth = parseHealth (getSec secs "HEALTH")
+     , mtErrors = errs
+     }
 
 -- | Load averages from 'uptime' output ("0.10, 0.05, 0.01").
 loads :: Text -> (Double, Double, Double)

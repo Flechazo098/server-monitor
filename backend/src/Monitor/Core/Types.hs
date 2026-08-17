@@ -149,7 +149,15 @@ instance FromJSON ServerStatus where
 -- | A snapshot of core system metrics.
 data Metrics = Metrics
   { mCpu         :: Double
+  , mCpuUser     :: Double
+  , mCpuSystem   :: Double
+  , mCpuIowait   :: Double
   , mMemUsedPct  :: Double
+  , mMemAvailableBytes :: Integer
+  , mMemCacheBytes :: Integer
+  , mMemBuffersBytes :: Integer
+  , mSwapUsedBytes :: Integer
+  , mSwapTotalBytes :: Integer
   , mLoad1       :: Double
   , mLoad5       :: Double
   , mLoad15      :: Double
@@ -166,7 +174,15 @@ data Metrics = Metrics
 instance ToJSON Metrics where
   toJSON m = object
     [ "cpu"        .= mCpu m
+    , "cpuUser"    .= mCpuUser m
+    , "cpuSystem"  .= mCpuSystem m
+    , "cpuIowait"  .= mCpuIowait m
     , "mem"        .= mMemUsedPct m
+    , "memAvailableBytes" .= mMemAvailableBytes m
+    , "memCacheBytes" .= mMemCacheBytes m
+    , "memBuffersBytes" .= mMemBuffersBytes m
+    , "swapUsedBytes" .= mSwapUsedBytes m
+    , "swapTotalBytes" .= mSwapTotalBytes m
     , "load1"      .= mLoad1 m
     , "load5"      .= mLoad5 m
     , "load15"     .= mLoad15 m
@@ -216,6 +232,7 @@ data Fail2banJail = Fail2banJail
   { fjName    :: Text
   , fjBanned  :: Int
   , fjTotal   :: Int
+  , fjBannedIps :: [Text]
   }
   deriving (Show, Generic)
 
@@ -224,6 +241,7 @@ instance ToJSON Fail2banJail where
     [ "name"   .= fjName f
     , "banned" .= fjBanned f
     , "total"  .= fjTotal f
+    , "bannedIps" .= fjBannedIps f
     ]
 
 -- | Backup status snapshot.
@@ -267,6 +285,7 @@ instance ToJSON HealthCheck where
 -- | One physical filesystem mount point.
 data DiskMount = DiskMount
   { dmFs    :: Text
+  , dmType  :: Text
   , dmSize  :: Text
   , dmUsed  :: Text
   , dmAvail :: Text
@@ -278,6 +297,7 @@ data DiskMount = DiskMount
 instance ToJSON DiskMount where
   toJSON d = object
     [ "fs"    .= dmFs d
+    , "type"  .= dmType d
     , "size"  .= dmSize d
     , "used"  .= dmUsed d
     , "avail" .= dmAvail d
@@ -355,7 +375,7 @@ data TcpPort = TcpPort
   , tpProto   :: Text
   , tpLocal   :: Text
   , tpProcess :: Maybe Text
-  , tpExposed :: Bool
+  , tpExposed :: Bool  -- ^ bound to a wildcard address; firewall policy still applies
   }
   deriving (Show, Generic)
 
@@ -521,7 +541,7 @@ data GiteaInfo = GiteaInfo
   , giRepos      :: Maybe Int
   , giUsers      :: Maybe Int
   , giActiveWeek :: Maybe Int
-  , giLastPush   :: Maybe Int
+  , giLastActivity :: Maybe Int
   }
   deriving (Show, Generic)
 
@@ -531,13 +551,12 @@ instance ToJSON GiteaInfo where
     , "repos"      .= giRepos g
     , "users"      .= giUsers g
     , "activeWeek" .= giActiveWeek g
-    , "lastPush"   .= giLastPush g
+    , "lastActivity" .= giLastActivity g
     ]
 
 -- | Caddy access-log size and growth.
 data CaddyLogs = CaddyLogs
   { clSizeBytes :: Integer
-  , clLines     :: Maybe Int
   , clMtime     :: UTCTime
   , clGrowthBps :: Double
   }
@@ -546,7 +565,6 @@ data CaddyLogs = CaddyLogs
 instance ToJSON CaddyLogs where
   toJSON c = object
     [ "sizeBytes" .= clSizeBytes c
-    , "lines"     .= clLines c
     , "mtime"     .= clMtime c
     , "growthBps" .= clGrowthBps c
     ]
@@ -637,7 +655,7 @@ instance ToJSON AlertConfig where
 
 -- | Collection scheduling and retention settings.
 data CollectionConfig = CollectionConfig
-  { ccFullIntervalSec :: Int  -- ^ seconds between heavy full batches (default 60)
+  { ccFullIntervalSec :: Int  -- ^ seconds between heavy full batches (default 300)
   , ccTimeoutSec      :: Int  -- ^ remote script timeout (default 90)
   , ccRetentionDays   :: Int  -- ^ history retention (default 30)
   , ccBackoffMaxSec   :: Int  -- ^ max retry delay on repeated failures (default 300)
@@ -646,7 +664,7 @@ data CollectionConfig = CollectionConfig
 
 defaultCollectionConfig :: CollectionConfig
 defaultCollectionConfig = CollectionConfig
-  { ccFullIntervalSec = 60
+  { ccFullIntervalSec = 300
   , ccTimeoutSec = 90
   , ccRetentionDays = 30
   , ccBackoffMaxSec = 300
@@ -764,6 +782,7 @@ data AlertPayload = AlertPayload
   , apSeverity :: Severity
   , apMessage  :: Text
   , apSince    :: UTCTime
+  , apTimestamp :: UTCTime
   , apState    :: Text  -- ^ "fired" | "resolved"
   }
   deriving (Show, Generic)
@@ -774,19 +793,20 @@ instance ToJSON AlertPayload where
     , "severity" .= apSeverity a
     , "message"  .= apMessage a
     , "since"    .= apSince a
+    , "timestamp" .= apTimestamp a
     , "state"    .= apState a
     ]
 
 -- | Events pushed to the WebSocket stream.
 data MonitorEvent
-  = MetricsEvent ServerId Metrics
+  = ServerEvent ServerId ServerState
   | StatusEvent ServerId ServerStatus
   | AlertEvent ServerId AlertPayload
   deriving (Show)
 
 instance ToJSON MonitorEvent where
-  toJSON (MetricsEvent sid m) = object
-    [ "type" .= ("metrics" :: Text), "server" .= sid, "data" .= m ]
+  toJSON (ServerEvent sid server) = object
+    [ "type" .= ("server" :: Text), "server" .= sid, "data" .= server ]
   toJSON (StatusEvent sid st) = object
     [ "type" .= ("status" :: Text), "server" .= sid, "data" .= st ]
   toJSON (AlertEvent sid a) = object
@@ -798,21 +818,25 @@ data AppState = AppState
   , events       :: TChan MonitorEvent
   , dbPath       :: FilePath
   , alertStates  :: TVar (Map ServerId (Map Text AlertEntry))
+  , alertConfig  :: AlertConfig
+  , collectionConfig :: CollectionConfig
   }
 
 -- | Deduplication bookkeeping for one alert key.
 data AlertEntry = AlertEntry
   { aeActive         :: Bool
+  , aeNotified       :: Bool
   , aeSince          :: UTCTime
   , aeLastTransition :: UTCTime
   , aeSeverity       :: Severity
   , aeMessage        :: Text
   }
-  deriving (Show, Generic)
+  deriving (Eq, Show, Generic)
 
 instance ToJSON AlertEntry where
   toJSON e = object
     [ "active" .= aeActive e
+    , "notified" .= aeNotified e
     , "since" .= aeSince e
     , "lastTransition" .= aeLastTransition e
     , "severity" .= aeSeverity e

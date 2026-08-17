@@ -4,6 +4,7 @@
 *.env
 .env.*
 !.env.example
+.local-secrets/
 
 # 本地配置（含服务器连接信息，本地维护）
 backend/config.json
@@ -15,6 +16,7 @@ node_modules/
 dist-newstyle/
 target/
 frontend/dist/
+frontend/.contract/
 src-tauri/binaries/*.exe
 src-tauri/binaries/*.exe-*
 dist/
@@ -24,6 +26,8 @@ dist/
 *.db-wal
 *.db-shm
 *.log
+
+docs/
 
 # 归档与安装包
 *.zip

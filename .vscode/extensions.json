@@ -1,0 +1,8 @@
+{
+  "recommendations": [
+    "haskell.haskell",
+    "rust-lang.rust-analyzer",
+    "vue.volar",
+    "tamasfe.even-better-toml"
+  ]
+}

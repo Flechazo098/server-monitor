@@ -1,6 +1,5 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE ScopedTypeVariables #-}
-{-# LANGUAGE TupleSections #-}
 
 -- | Background collection workers.
 --
@@ -26,10 +25,11 @@ module Monitor.Runtime.Worker
 
 import Control.Concurrent (forkIO, threadDelay)
 import Control.Concurrent.STM
-import Control.Exception (SomeException, finally, try)
-import Control.Monad (forM_, forever, unless, void, when)
+import Control.Exception (SomeException, fromException, try)
+import Control.Monad (forM_, forever, void, when)
 import Data.IORef
-import Data.List (foldl')
+import Data.Either (fromRight)
+import Data.List (find, foldl')
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import Data.Maybe (fromMaybe, maybeToList)
@@ -44,49 +44,56 @@ import Data.Time
 import Data.Time.Clock.POSIX (posixSecondsToUTCTime)
 import Monitor.Collector.Parse
   ( Parsed (..)
+  , MetricsTick (..)
   , parseBatch
   , parseMetricsTick
   )
-import Monitor.Collector.SSH (fullScript, metricsScript, runRemote)
+import Monitor.Collector.SSH (CollectorError (..), fullScript, metricsScript, runRemote)
 import Monitor.Core.Types
 import Monitor.Storage.SQLite
   ( cleanup
+  , loadAlertEntries
   , saveCaddyStats
+  , saveAlertEntries
   , saveEvent
   , saveMetrics
   )
 
 -- | Fork one worker per configured server.
 startWorkers :: AppState -> MonitorConfig -> IO ()
-startWorkers st cfg =
+startWorkers st cfg = do
+  runCleanup
+  void (forkIO cleanupLoop)
   mapM_
     (forkIO . monitorServer st (cfgAlerts cfg) (cfgCollection cfg))
     (cfgServers cfg)
+  where
+    retention = ccRetentionDays (cfgCollection cfg)
+    runCleanup = void (try (cleanup (dbPath st) retention) :: IO (Either SomeException ()))
+    cleanupLoop = forever $ do
+      threadDelay (6 * 3600 * 1000000)
+      runCleanup
 
 -- | Mutable state private to one server worker.
 data WorkerLocal = WorkerLocal
-  { wlBusy         :: IORef Bool
-  , wlFails        :: IORef Int
+  { wlFails        :: IORef Int
   , wlLastFull     :: IORef UTCTime
-  , wlLastStatus   :: IORef ServerStatus
+  , wlLastStatus   :: IORef (Maybe ServerStatus)
   , wlPrevNet      :: IORef (Maybe (UTCTime, Map Text (Integer, Integer)))
   , wlCpuHighSince :: IORef (Maybe UTCTime)
   , wlHealthFails  :: IORef (Map Text Int)
-  , wlLastCleanup  :: IORef UTCTime
   }
 
 newWorkerLocal :: IO WorkerLocal
 newWorkerLocal = do
   now <- getCurrentTime
   WorkerLocal
-    <$> newIORef False
-    <*> newIORef 0
+    <$> newIORef 0
     <*> newIORef (addUTCTime (-100000) now)
-    <*> newIORef Offline
+    <*> newIORef Nothing
     <*> newIORef Nothing
     <*> newIORef Nothing
     <*> newIORef Map.empty
-    <*> newIORef now
 
 -- | One alert condition evaluated on a tick.
 data AlertCond = AlertCond
@@ -100,8 +107,12 @@ data AlertCond = AlertCond
 monitorServer :: AppState -> AlertConfig -> CollectionConfig -> ServerConfig -> IO ()
 monitorServer st alerts coll cfg = do
   wl <- newWorkerLocal
-  atomically (modifyTVar' (serverStates st) (Map.insert sid (emptyState cfg)))
-  void (try (cleanup (dbPath st) (ccRetentionDays coll)) :: IO (Either SomeException ()))
+  restoredResult <- try (loadAlertEntries (dbPath st) sid)
+  let restored = fromRight Map.empty (restoredResult :: Either SomeException (Map Text AlertEntry))
+  atomically $ do
+    modifyTVar' (serverStates st) (Map.insert sid (emptyState cfg))
+    modifyTVar' (alertStates st) (Map.insert sid restored)
+  tick wl
   forever (loop wl)
   where
     sid = scId cfg
@@ -111,15 +122,13 @@ monitorServer st alerts coll cfg = do
       let base = max 5 (scIntervalSec cfg)
           delaySec = min (ccBackoffMaxSec coll) (base * (2 :: Int) ^ min fails 6)
       threadDelay (delaySec * 1000000)
-      wasBusy <- atomicModifyIORef' (wlBusy wl) (True,)
-      unless wasBusy $
-        finally (tick wl) (writeIORef (wlBusy wl) False)
+      tick wl
 
     tick wl = do
       now <- getCurrentTime
       lastFullT <- readIORef (wlLastFull wl)
       let doFull = diffUTCTime now lastFullT >= fromIntegral (ccFullIntervalSec coll)
-      r <- try (runRemote cfg (ccTimeoutSec coll) (if doFull then fullScript cfg else metricsScript))
+      r <- try (runRemote cfg (ccTimeoutSec coll) (if doFull then fullScript cfg else metricsScript cfg))
       case r of
         Left (e :: SomeException) -> onFailure wl now e
         Right out
@@ -133,7 +142,9 @@ monitorServer st alerts coll cfg = do
     onFailure wl now e = do
       fails <- readIORef (wlFails wl)
       writeIORef (wlFails wl) (fails + 1)
-      let msg = T.pack (show e)
+      let msg = case fromException e of
+            Just (CollectorError detail) -> detail
+            Nothing -> "collector failed"
       transitions <- alertTransitions now
         [ AlertCond "offline" SevCritical True ("unreachable: " <> msg) ]
       emitAlertEvents transitions
@@ -148,19 +159,28 @@ monitorServer st alerts coll cfg = do
           , ssLastError = Just msg
           , ssUpdatedAt = now
           })
-        when (lastSt /= Offline) (writeTChan (events st) (StatusEvent sid Offline))
-      when (lastSt /= Offline) (writeIORef (wlLastStatus wl) Offline)
+        when (lastSt /= Just Offline) (writeTChan (events st) (StatusEvent sid Offline))
+      when (lastSt /= Just Offline) (writeIORef (wlLastStatus wl) (Just Offline))
+      when (lastSt /= Just Offline) $
+        saveEvent (dbPath st) sid "status" SevCritical "fired" "server went offline"
       writeIORef (wlCpuHighSince wl) Nothing
       writeIORef (wlHealthFails wl) Map.empty
 
     -- Light tick: core metrics + per-interface counters for live rates.
-    onMetricsTick wl now (mMetrics, ifaces, days, caddy, errs) = do
-      rates <- computeRates wl now ifaces
-      let m' = fmap (setRates rates) mMetrics
+    onMetricsTick wl now tickData = do
+      writeIORef (wlFails wl) 0
+      rates <- computeRates wl now (mtNetIfaces tickData)
+      let m' = fmap (setRates rates) (mtMetrics tickData)
       updateCpuState wl now m'
       cpuCond <- cpuCondition wl now m'
+      healthConds <- healthConditions wl (mtHealth tickData)
       transitions <- alertTransitions now
-        (maybeToList cpuCond ++ [ AlertCond "offline" SevCritical False "reachable again" ])
+        ( maybeToList cpuCond
+          ++ maybeToList (memCondition m')
+          ++ maybeToList (rootDiskCondition m')
+          ++ healthConds
+          ++ [AlertCond "offline" SevCritical False "reachable again"]
+        )
       emitAlertEvents transitions
       forM_ m' (saveMetrics (dbPath st) sid)
       lastSt <- readIORef (wlLastStatus wl)
@@ -169,30 +189,34 @@ monitorServer st alerts coll cfg = do
         am <- readTVar (alertStates st)
         let prev = Map.findWithDefault (emptyState cfg) sid m
             prevCaddy = ssCaddy prev
-            newCaddy = mergeCaddy prevCaddy caddy now
+            newCaddy = mergeCaddy prevCaddy (mtCaddy tickData)
             st' = prev
               { ssStatus = Online
               , ssMetrics = m'
-              , ssNetIfaces = ifaces
-              , ssVnstatDays = days
+              , ssHealth = mtHealth tickData
+              , ssNetIfaces = mtNetIfaces tickData
+              , ssVnstatDays = mtVnstatDays tickData
               , ssCaddy = newCaddy
               , ssAlerts = activeAlerts am
-              , ssSectionErrors = Map.union errs (ssSectionErrors prev)
+              , ssSectionErrors = mergeLightErrors (ssSectionErrors prev) (mtErrors tickData)
               , ssLastError = Nothing
               , ssUpdatedAt = now
               }
         modifyTVar' (serverStates st) (Map.insert sid st')
-        when (lastSt /= Online) (writeTChan (events st) (StatusEvent sid Online))
-        forM_ m' (writeTChan (events st) . MetricsEvent sid)
-      when (lastSt /= Online) (writeIORef (wlLastStatus wl) Online)
+        when (lastSt == Just Offline) (writeTChan (events st) (StatusEvent sid Online))
+        writeTChan (events st) (ServerEvent sid st')
+      writeIORef (wlLastStatus wl) (Just Online)
+      when (lastSt == Just Offline) $
+        saveEvent (dbPath st) sid "status" SevInfo "resolved" "server came online"
 
     -- Full tick: everything, plus threshold / health / TLS / backup alerts.
     onFullTick wl now p = do
+      writeIORef (wlFails wl) 0
       rates <- computeRates wl now (pNetIfaces p)
       let m' = fmap (setRates rates) (pMetrics p)
       updateCpuState wl now m'
       cpuCond <- cpuCondition wl now m'
-      healthConds <- healthConditions wl p
+      healthConds <- healthConditions wl (pHealth p)
       let conds =
             maybeToList cpuCond
               ++ maybeToList (memCondition m')
@@ -205,15 +229,14 @@ monitorServer st alerts coll cfg = do
       emitAlertEvents transitions
       forM_ m' (saveMetrics (dbPath st) sid)
       forM_ (pCaddy p) $ \c ->
-        saveCaddyStats (dbPath st) sid (clSizeBytes c) (clLines c) now
-      cleanupIfDue wl
+        saveCaddyStats (dbPath st) sid (clSizeBytes c) now
       lastSt <- readIORef (wlLastStatus wl)
       atomically $ do
         m <- readTVar (serverStates st)
         am <- readTVar (alertStates st)
         let prev = Map.findWithDefault (emptyState cfg) sid m
             prevCaddy = ssCaddy prev
-            newCaddy = mergeCaddy prevCaddy (pCaddy p) now
+            newCaddy = mergeCaddy prevCaddy (pCaddy p)
             st' = prev
               { ssStatus = Online
               , ssMetrics = m'
@@ -236,28 +259,23 @@ monitorServer st alerts coll cfg = do
               , ssGitea = pGitea p
               , ssCaddy = newCaddy
               , ssAlerts = activeAlerts am
-              , ssSectionErrors = Map.union (pErrors p) (ssSectionErrors prev)
+              , ssSectionErrors = pErrors p
               , ssLastError = Nothing
               , ssUpdatedAt = now
               }
         modifyTVar' (serverStates st) (Map.insert sid st')
-        when (lastSt /= Online) (writeTChan (events st) (StatusEvent sid Online))
-        forM_ m' (writeTChan (events st) . MetricsEvent sid)
-      when (lastSt /= Online) (writeIORef (wlLastStatus wl) Online)
-
-    cleanupIfDue wl = do
-      now <- getCurrentTime
-      lastClean <- readIORef (wlLastCleanup wl)
-      when (diffUTCTime now lastClean >= 6 * 3600) $ do
-        writeIORef (wlLastCleanup wl) now
-        void (try (cleanup (dbPath st) (ccRetentionDays coll)) :: IO (Either SomeException ()))
+        when (lastSt == Just Offline) (writeTChan (events st) (StatusEvent sid Online))
+        writeTChan (events st) (ServerEvent sid st')
+      writeIORef (wlLastStatus wl) (Just Online)
+      when (lastSt == Just Offline) $
+        saveEvent (dbPath st) sid "status" SevInfo "resolved" "server came online"
 
     -- ---------------------------------------------------------------
     -- Alert engine (STM dedup / recovery / cooldown)
     -- ---------------------------------------------------------------
 
-    alertTransitions now conds =
-      atomically $ do
+    alertTransitions now conds = do
+      (entries', changed, payloads) <- atomically $ do
         m <- readTVar (alertStates st)
         let entries = Map.findWithDefault Map.empty sid m
             go (entries', evs) cond =
@@ -267,21 +285,45 @@ monitorServer st alerts coll cfg = do
                    Just payload -> (Map.insert (condKey cond) newEntry entries', payload : evs)
             (entries', evs) = foldl' go (entries, []) conds
         writeTVar (alertStates st) (Map.insert sid entries' m)
-        pure (reverse evs)
+        pure (entries', entries' /= entries, reverse evs)
+      when changed (saveAlertEntries (dbPath st) sid entries')
+      pure payloads
 
     applyCond now mEntry cond =
-      let entry = fromMaybe (AlertEntry False now (addUTCTime (-100000) now) SevInfo "") mEntry
+      let initialTransition = addUTCTime (negate (fromIntegral (acCooldownSec alerts)) - 1) now
+          entry = fromMaybe (AlertEntry False False now initialTransition SevInfo "") mEntry
           cooldownEnd = addUTCTime (fromIntegral (acCooldownSec alerts)) (aeLastTransition entry)
       in case (condActive cond, aeActive entry) of
            (True, False)
              | now >= cooldownEnd ->
-                 let e' = AlertEntry True now now (condSeverity cond) (condMessage cond)
-                 in (e', Just (AlertPayload (condKey cond) (condSeverity cond) (condMessage cond) now "fired"))
-             | otherwise -> (entry, Nothing)  -- suppressed by cooldown
-           (True, True) -> (entry, Nothing)
+                 let e' = AlertEntry True True now now (condSeverity cond) (condMessage cond)
+                 in (e', Just (AlertPayload (condKey cond) (condSeverity cond) (condMessage cond) now now "fired"))
+             | otherwise ->
+                 (entry
+                    { aeActive = True
+                    , aeNotified = False
+                    , aeSince = now
+                    , aeSeverity = condSeverity cond
+                    , aeMessage = condMessage cond
+                    }
+                 , Nothing)
+           (True, True)
+             | not (aeNotified entry) && now >= cooldownEnd ->
+                 let e' = entry
+                       { aeNotified = True
+                       , aeLastTransition = now
+                       , aeSeverity = condSeverity cond
+                       , aeMessage = condMessage cond
+                       }
+                 in (e', Just (AlertPayload (condKey cond) (condSeverity cond) (condMessage cond) (aeSince entry) now "fired"))
+             | otherwise ->
+                 (entry { aeSeverity = condSeverity cond, aeMessage = condMessage cond }, Nothing)
            (False, True) ->
-             let e' = AlertEntry False (aeSince entry) now (aeSeverity entry) (aeMessage entry)
-             in (e', Just (AlertPayload (condKey cond) (condSeverity cond) (condMessage cond) (aeSince entry) "resolved"))
+             let e' = entry { aeActive = False, aeNotified = False, aeLastTransition = now }
+                 payload = if aeNotified entry
+                   then Just (AlertPayload (condKey cond) (aeSeverity entry) (condMessage cond) (aeSince entry) now "resolved")
+                   else Nothing
+             in (e', payload)
            (False, False) -> (entry, Nothing)
 
     emitAlertEvents payloads =
@@ -306,21 +348,20 @@ monitorServer st alerts coll cfg = do
     computeRates wl now ifaces = do
       prev <- readIORef (wlPrevNet wl)
       let cur = Map.fromList [ (niName n, (niRx n, niTx n)) | n <- ifaces, not (isVirtual (niName n)) ]
-          curKeys = Map.keysSet cur
-          curTotal = (sum (map fst (Map.elems cur)), sum (map snd (Map.elems cur)))
-          allMap = Map.fromList [ (niName n, (niRx n, niTx n)) | n <- ifaces ]
-      writeIORef (wlPrevNet wl) (Just (now, allMap))
+      writeIORef (wlPrevNet wl) (Just (now, cur))
       case prev of
         Just (t0, prevMap) ->
-          let prevCur = Map.restrictKeys prevMap curKeys
-              prevTotal = (sum (map fst (Map.elems prevCur)), sum (map snd (Map.elems prevCur)))
+          let deltas = Map.elems (Map.intersectionWith delta cur prevMap)
+              (rxDelta, txDelta) = foldl' (\(rx, tx) (drx, dtx) -> (rx + drx, tx + dtx)) (0, 0) deltas
               dt = realToFrac (diffUTCTime now t0) :: Double
-          in if dt <= 0
+          in if dt <= 0 || null deltas
                then pure (0, 0)
-               else pure ( fromIntegral (fst curTotal - fst prevTotal) / dt
-                         , fromIntegral (snd curTotal - snd prevTotal) / dt
+               else pure ( fromIntegral rxDelta / dt
+                         , fromIntegral txDelta / dt
                          )
         Nothing -> pure (0, 0)
+      where
+        delta (rx, tx) (prevRx, prevTx) = (max 0 (rx - prevRx), max 0 (tx - prevTx))
 
     isVirtual n =
       let lower = T.toLower n
@@ -364,22 +405,31 @@ monitorServer st alerts coll cfg = do
       ]
 
     tlsConditions p =
-      [ AlertCond ("tls:" <> tcHost c) SevWarning (tcDaysLeft c < acTlsMinDays alerts) msg
-      | c <- pTlsCerts p
-      , let msg = "TLS " <> tcHost c <> " expires in " <> T.pack (show (tcDaysLeft c)) <> " days"
-      ]
+      concatMap conditionFor (certHostsOf cfg)
+      where
+        conditionFor host = case find ((== host) . tcHost) (pTlsCerts p) of
+          Just cert ->
+            [ AlertCond ("tls:" <> host) SevWarning (tcDaysLeft cert < acTlsMinDays alerts)
+                (if tcDaysLeft cert < acTlsMinDays alerts
+                  then "TLS " <> host <> " expires in " <> T.pack (show (tcDaysLeft cert)) <> " days"
+                  else "TLS " <> host <> " validity is healthy")
+            ]
+          Nothing
+            | Map.member ("tls:" <> host) (pErrors p) || Map.member "TLS" (pErrors p) ->
+                [AlertCond ("tls:" <> host) SevCritical True ("TLS probe failed for " <> host)]
+            | otherwise -> []
 
-    healthConditions wl p = do
+    healthConditions wl health = do
       old <- readIORef (wlHealthFails wl)
       let newMap = Map.fromList
             [ (hcUrl h, if hcOk h then 0 else 1 + Map.findWithDefault 0 (hcUrl h) old)
-            | h <- pHealth p
+            | h <- health
             ]
       writeIORef (wlHealthFails wl) newMap
       pure
         [ AlertCond ("health:" <> hcUrl h) SevCritical
             (Map.findWithDefault 0 (hcUrl h) newMap >= acHealthMaxFails alerts) msg
-        | h <- pHealth p
+        | h <- health
         , let fails = Map.findWithDefault 0 (hcUrl h) newMap
         , let msg = "health check " <> hcUrl h <> " failing (" <> T.pack (show fails) <> "x): " <> hcStatus h
         ]
@@ -388,6 +438,8 @@ monitorServer st alerts coll cfg = do
       Nothing -> []
       Just b ->
         AlertCond "backup-failed" SevCritical (bkFailed b == Just True) "backup service reported failure"
+          : AlertCond "backup-empty" SevCritical (bkCount b <= 0)
+              (if bkCount b <= 0 then "no local backup files found" else "backup files present")
           : case bkNewestEpoch b of
                Nothing -> []
                Just epoch ->
@@ -398,19 +450,26 @@ monitorServer st alerts coll cfg = do
 
     fmt1 d = T.pack (show (fromIntegral (round (d * 10) :: Int) / 10 :: Double))
 
+    rootDiskCondition m = do
+      met <- m
+      let over = mDiskUsedPct met >= acDiskPct alerts
+      pure (AlertCond "disk:/" SevCritical over
+        (if over then "Disk / at " <> fmt1 (mDiskUsedPct met) <> "%"
+                 else "Disk / back to normal"))
+
+    mergeLightErrors old fresh =
+      Map.union fresh (foldr Map.delete old lightSections)
+      where
+        lightSections = ["CPU", "MEM", "LOAD", "UPTIME", "DISK", "NETDEV", "VNSTATD", "CADDY", "HEALTH"]
+
     -- Merge a fresh caddy sample with the previous one to derive growth.
-    -- The light script only fetches the size, so a missing line count is
-    -- carried over from the previous full sample instead of being dropped.
-    mergeCaddy _ Nothing _ = Nothing
-    mergeCaddy prev (Just c) now =
-      let withLines = case clLines c of
-            Just _ -> c
-            Nothing -> c { clLines = prev >>= clLines }
-      in Just withLines
+    mergeCaddy _ Nothing = Nothing
+    mergeCaddy prev (Just c) =
+      Just c
         { clGrowthBps = case prev of
             Just p ->
-              let dt = realToFrac (diffUTCTime now (clMtime p)) :: Double
+              let dt = realToFrac (diffUTCTime (clMtime c) (clMtime p)) :: Double
                   dSize = fromIntegral (clSizeBytes c - clSizeBytes p)
-              in if dt > 0 then dSize / dt else 0
+              in if dt > 0 then max 0 (dSize / dt) else 0
             Nothing -> 0
         }

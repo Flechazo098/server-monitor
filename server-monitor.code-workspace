@@ -1,0 +1,10 @@
+{
+  "folders": [
+    { "name": "server-monitor", "path": "." }
+  ],
+  "settings": {
+    "rust-analyzer.linkedProjects": ["${workspaceFolder:server-monitor}/src-tauri/Cargo.toml"],
+    "typescript.tsdk": "${workspaceFolder:server-monitor}/frontend/node_modules/typescript/lib",
+    "haskell.manageHLS": "GHCup"
+  }
+}

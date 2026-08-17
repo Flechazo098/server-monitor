@@ -4,9 +4,9 @@
   "version": "0.1.0",
   "identifier": "cc.sighs.server-monitor",
   "build": {
-    "beforeDevCommand": "npm run dev --prefix F:/code/server/server-monitor/frontend",
+    "beforeDevCommand": "npm run dev --prefix ../frontend",
     "devUrl": "http://localhost:5173",
-    "beforeBuildCommand": "npm run build --prefix F:/code/server/server-monitor/frontend",
+    "beforeBuildCommand": "npm run build --prefix ../frontend",
     "frontendDist": "../frontend/dist"
   },
   "app": {
@@ -21,7 +21,7 @@
       }
     ],
     "security": {
-      "csp": null
+      "csp": "default-src 'self'; connect-src 'self' ipc: http://ipc.localhost http://127.0.0.1:* ws://127.0.0.1:* ws://localhost:5173; img-src 'self' data:; style-src 'self' 'unsafe-inline'; font-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"
     }
   },
   "bundle": {
@@ -29,5 +29,14 @@
     "targets": ["nsis", "msi"],
     "externalBin": ["binaries/monitor-backend"],
     "icon": ["icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/icon.icns", "icons/icon.ico"]
+  },
+  "plugins": {
+    "updater": {
+      "endpoints": [],
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IENEQjg4NThGNTQ4QzVEQjYKUldTMlhZeFVqNFc0elVQaXg5UUZ3R2FoRkRRRCtoYUF3d05BMldvYVhnYnBtWjM5bFF4MThraGIK",
+      "windows": {
+        "installMode": "passive"
+      }
+    }
   }
 }

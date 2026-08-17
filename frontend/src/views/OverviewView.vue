@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { useServersStore } from '../stores/servers'
-import { fmtBytes, fmtClock, fmtDuration, fmtPct, fmtRate, levelFor, tlsLevel } from '../lib/format'
+import { fmtBytes, fmtClock, fmtDuration, fmtPct, fmtRate, healthState, levelFor, tlsLevel } from '../lib/format'
 import { CHART } from '../lib/chartTheme'
 import type { Alert, HealthCheck, ServerState, TlsCert } from '../types'
 import BarsChart from '../components/BarsChart.vue'
@@ -11,15 +11,17 @@ import Panel from '../components/Panel.vue'
 import EmptyState from '../components/EmptyState.vue'
 
 const store = useServersStore()
+const thresholds = computed(() => store.healthInfo?.alerts)
 
 const online = computed(() => store.servers.filter((s) => s.status === 'online').length)
+const healthy = computed(() => store.servers.filter((s) => healthState(s.status, s.alerts).kind === 'ok').length)
 const avgCpu = computed(() => {
   const vals = store.servers.flatMap((s) => (s.metrics ? [s.metrics.cpu] : []))
-  return vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : 0
+  return vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : null
 })
 const avgMem = computed(() => {
   const vals = store.servers.flatMap((s) => (s.metrics ? [s.metrics.mem] : []))
-  return vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : 0
+  return vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : null
 })
 const trafficToday = computed(() =>
   store.servers.reduce(
@@ -47,18 +49,26 @@ const tlsRows = computed<{ server: ServerState; c: TlsCert }[]>(() =>
   store.servers.flatMap((s) => s.tlsCerts.map((c) => ({ server: s, c }))),
 )
 
-const vnstatCats = computed(() => {
-  const days = store.servers[0]?.vnstatDays ?? []
-  return days.slice(-14).map((d) => d.date)
+const trafficDays = computed(() => {
+  const totals = new Map<string, { rx: number; tx: number }>()
+  for (const server of store.servers) {
+    for (const day of server.vnstatDays) {
+      const current = totals.get(day.date) ?? { rx: 0, tx: 0 }
+      current.rx += day.rx
+      current.tx += day.tx
+      totals.set(day.date, current)
+    }
+  }
+  return [...totals.entries()]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .slice(-14)
+    .map(([date, values]) => ({ date, ...values }))
 })
-const vnstatRx = computed(() => {
-  const days = store.servers[0]?.vnstatDays ?? []
-  return days.slice(-14).map((d) => d.rx)
-})
-const vnstatTx = computed(() => {
-  const days = store.servers[0]?.vnstatDays ?? []
-  return days.slice(-14).map((d) => d.tx)
-})
+const vnstatCats = computed(() => trafficDays.value.map((day) => day.date))
+const vnstatRx = computed(() => trafficDays.value.map((day) => day.rx))
+const vnstatTx = computed(() => trafficDays.value.map((day) => day.tx))
+const latestUpdate = computed(() => store.servers.map((server) => server.updatedAt).sort().at(-1))
+const soonestCert = computed(() => [...tlsRows.value].sort((a, b) => a.c.daysLeft - b.c.daysLeft)[0])
 </script>
 
 <template>
@@ -66,10 +76,10 @@ const vnstatTx = computed(() => {
     <div class="page-head">
       <div>
         <h1 class="page-title">Overview</h1>
-        <p class="page-sub">Health and traffic of all monitored hosts</p>
+        <p class="page-sub">{{ healthy }}/{{ store.servers.length }} healthy · {{ online }} reachable · {{ alertCount }} active alerts</p>
       </div>
       <div class="page-side">
-        <span v-if="store.servers[0]">updated {{ fmtClock(store.servers[0].updatedAt) }}</span>
+        <span v-if="latestUpdate">updated {{ fmtClock(latestUpdate) }}</span>
       </div>
     </div>
 
@@ -86,11 +96,11 @@ const vnstatTx = computed(() => {
       </div>
       <div class="stat">
         <div class="stat-label">Avg CPU</div>
-        <div class="stat-value">{{ avgCpu.toFixed(1) }}<small>%</small></div>
+        <div class="stat-value">{{ fmtPct(avgCpu) }}</div>
       </div>
       <div class="stat">
         <div class="stat-label">Avg MEM</div>
-        <div class="stat-value">{{ avgMem.toFixed(1) }}<small>%</small></div>
+        <div class="stat-value">{{ fmtPct(avgMem) }}</div>
       </div>
       <div class="stat">
         <div class="stat-label">Traffic today</div>
@@ -98,8 +108,8 @@ const vnstatTx = computed(() => {
       </div>
       <div class="stat">
         <div class="stat-label">Cert expiring soonest</div>
-        <div class="stat-value" v-if="tlsRows.length">
-          {{ Math.min(...tlsRows.map((t) => t.c.daysLeft)) }}<small>days · {{ tlsRows.find((t) => t.c.daysLeft === Math.min(...tlsRows.map((x) => x.c.daysLeft)))?.c.host }}</small>
+        <div class="stat-value" v-if="soonestCert">
+          {{ soonestCert.c.daysLeft }}<small>days · {{ soonestCert.c.host }}</small>
         </div>
         <div class="stat-value faint" v-else>—</div>
       </div>
@@ -126,24 +136,24 @@ const vnstatTx = computed(() => {
               <RouterLink :to="'/servers/' + s.id">{{ s.name }}</RouterLink>
             </td>
             <td>
-              <StatusChip :kind="s.status" :label="s.status" dot />
+              <StatusChip :kind="healthState(s.status, s.alerts).kind" :label="healthState(s.status, s.alerts).label" dot />
             </td>
             <template v-if="s.metrics">
               <td>
                 <div class="meter-cell">
-                  <MeterBar :value="s.metrics.cpu" :level="levelFor('cpu', s.metrics.cpu)" :threshold="85" />
+                  <MeterBar :value="s.metrics.cpu" :level="levelFor('cpu', s.metrics.cpu, thresholds?.cpuPct)" :threshold="thresholds?.cpuPct ?? 85" />
                   <span class="num">{{ fmtPct(s.metrics.cpu) }}</span>
                 </div>
               </td>
               <td>
                 <div class="meter-cell">
-                  <MeterBar :value="s.metrics.mem" :level="levelFor('mem', s.metrics.mem)" :threshold="90" />
+                  <MeterBar :value="s.metrics.mem" :level="levelFor('mem', s.metrics.mem, thresholds?.memPct)" :threshold="thresholds?.memPct ?? 90" />
                   <span class="num">{{ fmtPct(s.metrics.mem) }}</span>
                 </div>
               </td>
               <td>
                 <div class="meter-cell">
-                  <MeterBar :value="s.metrics.disk" :level="levelFor('disk', s.metrics.disk)" :threshold="80" />
+                  <MeterBar :value="s.metrics.disk" :level="levelFor('disk', s.metrics.disk, thresholds?.diskPct)" :threshold="thresholds?.diskPct ?? 80" />
                   <span class="num">{{ fmtPct(s.metrics.disk) }}</span>
                 </div>
               </td>
@@ -196,13 +206,13 @@ const vnstatTx = computed(() => {
 
         <Panel title="Public entry points" flush>
           <template v-if="healthRows.length">
-            <table class="tbl">
+            <table class="tbl compact-table">
               <tbody>
                 <tr v-for="({ h }, i) in healthRows" :key="i">
                   <td style="width: 24px"><span class="dot" :class="h.ok ? 'ok' : 'crit'" /></td>
-                  <td class="mono">{{ h.url }}</td>
-                  <td class="num">{{ h.ok ? h.status : h.status + ' ✕' }}</td>
-                  <td class="num">{{ h.latencyMs }}ms</td>
+                  <td class="mono compact-primary" :title="h.url">{{ h.url }}</td>
+                  <td class="num compact-status" :class="h.ok ? 'ok-text' : 'crit-text'">{{ h.status }}</td>
+                  <td class="num compact-latency">{{ h.latencyMs }}ms</td>
                 </tr>
               </tbody>
             </table>
@@ -212,18 +222,17 @@ const vnstatTx = computed(() => {
 
         <Panel title="TLS certificates" flush>
           <template v-if="tlsRows.length">
-            <table class="tbl">
+            <table class="tbl compact-table">
               <tbody>
                 <tr v-for="({ c }, i) in tlsRows" :key="i">
-                  <td style="width: 24px"><span class="dot" :class="tlsLevel(c.daysLeft)" /></td>
-                  <td class="cell-main">{{ c.host }}</td>
-                  <td class="num">
+                  <td style="width: 24px"><span class="dot" :class="tlsLevel(c.daysLeft, thresholds?.tlsMinDays)" /></td>
+                  <td class="cell-main compact-primary" :title="c.fingerprint">{{ c.host }}</td>
+                  <td class="num compact-status">
                     <StatusChip
-                      :kind="tlsLevel(c.daysLeft)"
+                      :kind="tlsLevel(c.daysLeft, thresholds?.tlsMinDays)"
                       :label="c.daysLeft + 'd'"
                     />
                   </td>
-                  <td class="mono faint">{{ c.fingerprint.slice(7, 24) }}…</td>
                 </tr>
               </tbody>
             </table>

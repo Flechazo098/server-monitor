@@ -20,7 +20,7 @@ let ro: ResizeObserver | null = null
 
 function render() {
   if (!chart) return
-  chart.setOption(barOption(props.categories, props.series))
+  chart.setOption(barOption(props.categories, props.series), { notMerge: true, lazyUpdate: true })
 }
 
 onMounted(() => {

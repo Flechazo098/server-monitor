@@ -6,7 +6,7 @@ import { fmtDateTime } from '../lib/format'
 import StatusChip from '../components/StatusChip.vue'
 import Panel from '../components/Panel.vue'
 import EmptyState from '../components/EmptyState.vue'
-import type { EventRow, Severity } from '../types'
+import { EventRowSchema, type EventRow, type Severity } from '../types'
 
 const store = useServersStore()
 const rows = ref<EventRow[]>([])
@@ -20,9 +20,10 @@ const severityFilter = ref<'all' | Severity>('all')
 let timer: number | undefined
 
 async function load() {
+  if (loading.value) return
   loading.value = true
   try {
-    rows.value = await apiGet<EventRow[]>('/api/events?limit=300')
+    rows.value = await apiGet('/api/events?limit=300', EventRowSchema.array())
     error.value = null
   } catch (e) {
     error.value = String(e)
@@ -33,11 +34,19 @@ async function load() {
 
 const merged = computed<EventRow[]>(() => {
   const live = store.liveEvents.filter(
-    (e) => !rows.value.some((r) => r.ts === e.ts && r.message === e.message && r.server === e.server),
+    (event) => !rows.value.some((row) => isSameEvent(row, event)),
   )
   const all = [...live, ...rows.value].sort((a, b) => b.ts.localeCompare(a.ts))
   return all.slice(0, 300)
 })
+
+function isSameEvent(a: EventRow, b: EventRow): boolean {
+  return a.server === b.server
+    && a.type === b.type
+    && a.state === b.state
+    && a.message === b.message
+    && Math.abs(new Date(a.ts).getTime() - new Date(b.ts).getTime()) < 2_000
+}
 
 const filtered = computed(() =>
   merged.value.filter((e) => {
@@ -53,9 +62,13 @@ function chipKind(e: EventRow): 'ok' | 'warn' | 'crit' | 'info' {
   return e.severity === 'critical' ? 'crit' : e.severity === 'warning' ? 'warn' : 'info'
 }
 
+function severityLabel(severity: Severity): string {
+  return severity === 'critical' ? 'Critical' : severity === 'warning' ? 'Warning' : 'Info'
+}
+
 onMounted(() => {
   load()
-  timer = window.setInterval(load, 15000)
+  timer = window.setInterval(load, 30000)
 })
 onBeforeUnmount(() => window.clearInterval(timer))
 </script>
@@ -65,7 +78,7 @@ onBeforeUnmount(() => window.clearInterval(timer))
     <div class="page-head">
       <div>
         <h1 class="page-title">Events</h1>
-        <p class="page-sub">Alert transitions and status changes, newest first</p>
+        <p class="page-sub">{{ filtered.filter((event) => event.state === 'fired').length }} active transitions in current view</p>
       </div>
       <div class="page-side">{{ filtered.length }} events shown</div>
     </div>
@@ -104,13 +117,13 @@ onBeforeUnmount(() => window.clearInterval(timer))
           </tr>
         </thead>
         <tbody>
-          <tr v-for="(e, i) in filtered" :key="i">
+          <tr v-for="e in filtered" :key="e.server + e.ts + e.type + e.state + e.message">
             <td class="mono dim">{{ fmtDateTime(e.ts) }}</td>
             <td class="mono">{{ e.server }}</td>
             <td class="mono">{{ e.type }}</td>
-            <td><StatusChip :kind="chipKind(e)" :label="e.severity" /></td>
-            <td><span class="mono" :class="e.state === 'resolved' ? 'ok-text' : e.state === 'fired' ? 'crit-text' : 'dim'">{{ e.state || '—' }}</span></td>
-            <td class="mono" style="white-space: normal">{{ e.message }}</td>
+            <td><StatusChip :kind="chipKind(e)" :label="severityLabel(e.severity)" /></td>
+            <td><span class="event-state" :class="e.state === 'resolved' ? 'resolved' : e.state === 'fired' ? 'fired' : ''">{{ e.state === 'resolved' ? 'Recovered' : e.state === 'fired' ? 'Active' : '—' }}</span></td>
+            <td class="event-message">{{ e.message }}</td>
           </tr>
         </tbody>
       </table>

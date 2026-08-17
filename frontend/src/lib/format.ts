@@ -1,5 +1,7 @@
 // Shared formatting helpers for the whole frontend.
 
+import type { Alert, ServerStatus } from '../types'
+
 const UNITS = ['B', 'KB', 'MB', 'GB', 'TB', 'PB']
 
 export function fmtBytes(n: number): string {
@@ -60,24 +62,31 @@ export function fmtEpoch(epoch: number | null | undefined): string {
 // Semantic level for a percentage metric, with per-metric thresholds.
 export type Level = 'ok' | 'warn' | 'crit'
 
-export function levelFor(kind: 'cpu' | 'mem' | 'disk', v: number): Level {
+export function levelFor(kind: 'cpu' | 'mem' | 'disk', v: number, threshold?: number): Level {
   switch (kind) {
     case 'cpu':
-      return v >= 85 ? 'crit' : v >= 70 ? 'warn' : 'ok'
+      return v >= 95 ? 'crit' : v >= (threshold ?? 85) ? 'warn' : 'ok'
     case 'mem':
-      return v >= 90 ? 'crit' : v >= 70 ? 'warn' : 'ok'
+      return v >= (threshold ?? 90) ? 'crit' : v >= (threshold ?? 90) * 0.8 ? 'warn' : 'ok'
     case 'disk':
-      return v >= 80 ? 'crit' : v >= 60 ? 'warn' : 'ok'
+      return v >= (threshold ?? 80) ? 'crit' : v >= (threshold ?? 80) * 0.8 ? 'warn' : 'ok'
   }
 }
 
-export function tlsLevel(daysLeft: number): Level {
+export function tlsLevel(daysLeft: number, warningDays = 30): Level {
   if (daysLeft < 0) return 'crit'
-  if (daysLeft < 15) return 'crit'
-  if (daysLeft < 30) return 'warn'
+  if (daysLeft < Math.max(7, warningDays / 2)) return 'crit'
+  if (daysLeft < warningDays) return 'warn'
   return 'ok'
 }
 
 export function severityToLevel(sev: string): Level {
   return sev === 'critical' ? 'crit' : sev === 'warning' ? 'warn' : 'ok'
+}
+
+export function healthState(status: ServerStatus, alerts: Alert[]): { kind: 'ok' | 'warn' | 'crit' | 'off'; label: string } {
+  if (status === 'offline') return { kind: 'off', label: 'Offline' }
+  if (alerts.some((alert) => alert.severity === 'critical')) return { kind: 'crit', label: 'Critical' }
+  if (alerts.some((alert) => alert.severity === 'warning')) return { kind: 'warn', label: 'Warning' }
+  return { kind: 'ok', label: 'Healthy' }
 }

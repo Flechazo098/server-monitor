@@ -1,0 +1,10 @@
+cradle:
+  cabal:
+    - path: "src"
+      component: "lib:monitor-backend"
+    - path: "app/Main.hs"
+      component: "exe:monitor-backend"
+    - path: "app/Contract.hs"
+      component: "exe:monitor-contract"
+    - path: "test"
+      component: "test:monitor-tests"

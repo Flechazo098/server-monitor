@@ -1,10 +1,10 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { apiGet } from '../api/client'
 import { useServersStore } from '../stores/servers'
 import { CHART } from '../lib/chartTheme'
 import { fmtBytes } from '../lib/format'
-import type { Metrics } from '../types'
+import { MetricsSchema, type Metrics } from '../types'
 import LineChart from '../components/LineChart.vue'
 import BarsChart from '../components/BarsChart.vue'
 import Panel from '../components/Panel.vue'
@@ -22,8 +22,9 @@ async function load() {
   if (!serverId.value) return
   loading.value = true
   try {
-    rows.value = await apiGet<Metrics[]>(
+    rows.value = await apiGet(
       '/api/history?server=' + encodeURIComponent(serverId.value) + '&hours=' + hours.value,
+      MetricsSchema.array(),
     )
     error.value = null
   } catch (e) {
@@ -38,11 +39,16 @@ watch([serverId, hours], load)
 const series = computed(() => {
   switch (metric.value) {
     case 'cpu':
-      return [{ name: 'CPU %', data: rows.value.map((m) => [m.timestamp, m.cpu] as [string, number]), color: CHART.cpu, area: true }]
+      return [
+        { name: 'total', data: rows.value.map((m) => [m.timestamp, m.cpu] as [string, number]), color: CHART.cpu, area: true, unit: '%' as const },
+        { name: 'user', data: rows.value.map((m) => [m.timestamp, m.cpuUser] as [string, number]), color: CHART.cpuUser, unit: '%' as const },
+        { name: 'system', data: rows.value.map((m) => [m.timestamp, m.cpuSystem] as [string, number]), color: CHART.cpuSystem, unit: '%' as const },
+        { name: 'iowait', data: rows.value.map((m) => [m.timestamp, m.cpuIowait] as [string, number]), color: CHART.cpuIowait, unit: '%' as const },
+      ]
     case 'mem':
-      return [{ name: 'MEM %', data: rows.value.map((m) => [m.timestamp, m.mem] as [string, number]), color: CHART.mem, area: true }]
+      return [{ name: 'memory used', data: rows.value.map((m) => [m.timestamp, m.mem] as [string, number]), color: CHART.mem, area: true, unit: '%' as const }]
     case 'disk':
-      return [{ name: 'DISK / %', data: rows.value.map((m) => [m.timestamp, m.disk] as [string, number]), color: CHART.disk, area: true }]
+      return [{ name: 'disk /', data: rows.value.map((m) => [m.timestamp, m.disk] as [string, number]), color: CHART.disk, area: true, unit: '%' as const }]
     case 'load':
       return [
         { name: 'load1', data: rows.value.map((m) => [m.timestamp, m.load1] as [string, number]), color: CHART.load },
@@ -51,13 +57,13 @@ const series = computed(() => {
       ]
     case 'net':
       return [
-        { name: 'rx', data: rows.value.map((m) => [m.timestamp, m.rxRate] as [string, number]), color: CHART.rx, area: true },
-        { name: 'tx', data: rows.value.map((m) => [m.timestamp, m.txRate] as [string, number]), color: CHART.tx, area: true },
+        { name: 'rx', data: rows.value.map((m) => [m.timestamp, m.rxRate] as [string, number]), color: CHART.rx, area: true, unit: 'B/s' as const },
+        { name: 'tx', data: rows.value.map((m) => [m.timestamp, m.txRate] as [string, number]), color: CHART.tx, area: true, unit: 'B/s' as const },
       ]
     case 'rx':
-      return [{ name: 'rx cumulative', data: rows.value.map((m) => [m.timestamp, m.rxBytes] as [string, number]), color: CHART.rx, area: true }]
+      return [{ name: 'rx cumulative', data: rows.value.map((m) => [m.timestamp, m.rxBytes] as [string, number]), color: CHART.rx, area: true, unit: 'bytes' as const }]
     case 'tx':
-      return [{ name: 'tx cumulative', data: rows.value.map((m) => [m.timestamp, m.txBytes] as [string, number]), color: CHART.tx, area: true }]
+      return [{ name: 'tx cumulative', data: rows.value.map((m) => [m.timestamp, m.txBytes] as [string, number]), color: CHART.tx, area: true, unit: 'bytes' as const }]
   }
 })
 
@@ -65,12 +71,13 @@ const vnstatCats = computed(() => (store.servers.find((s) => s.id === serverId.v
 const vnstatRx = computed(() => (store.servers.find((s) => s.id === serverId.value)?.vnstatDays ?? []).slice(-30).map((d) => d.rx))
 const vnstatTx = computed(() => (store.servers.find((s) => s.id === serverId.value)?.vnstatDays ?? []).slice(-30).map((d) => d.tx))
 
-onMounted(() => {
-  if (store.servers.length) {
-    serverId.value = store.servers[0].id
-    load()
-  }
-})
+watch(
+  () => store.servers.map((server) => server.id),
+  (ids) => {
+    if (!serverId.value && ids.length) serverId.value = ids[0]
+  },
+  { immediate: true },
+)
 </script>
 
 <template>
@@ -78,7 +85,7 @@ onMounted(() => {
     <div class="page-head">
       <div>
         <h1 class="page-title">History</h1>
-        <p class="page-sub">Persisted metrics from the local SQLite store (read-only)</p>
+        <p class="page-sub">{{ hours }}h window · {{ rows.length }} persisted samples</p>
       </div>
       <div class="page-side mono">{{ rows.length }} samples</div>
     </div>
@@ -111,7 +118,7 @@ onMounted(() => {
       <Panel title="Metric history" flush>
         <div v-if="loading && rows.length === 0" class="loading"><span class="spinner" /> loading…</div>
         <template v-else-if="rows.length">
-          <div class="panel-body"><LineChart :series="series" height="260px" /></div>
+          <div class="panel-body"><LineChart :series="series" height="260px" :min="['cpu', 'mem', 'disk', 'net'].includes(metric) ? 0 : null" :max="['cpu', 'mem', 'disk'].includes(metric) ? 100 : null" /></div>
         </template>
         <EmptyState v-else icon="clock" message="No samples in this window" />
       </Panel>

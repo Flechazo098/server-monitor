@@ -1,240 +1,315 @@
-// TypeScript mirrors of the Haskell backend JSON payloads.
-// Keep field names in sync with Monitor.Core.Types.
+import { z } from 'zod'
 
-export type ServerStatus = 'online' | 'offline'
-export type Severity = 'info' | 'warning' | 'critical'
+const finite = z.number().finite()
+const integer = z.number().int().safe()
+const nonNegativeInteger = integer.nonnegative()
+const timestamp = z.string().min(1)
 
-export interface Metrics {
-  cpu: number
-  mem: number
-  load1: number
-  load5: number
-  load15: number
-  uptimeSec: number
-  disk: number
-  rxBytes: number
-  txBytes: number
-  rxRate: number
-  txRate: number
-  timestamp: string
-}
+export const ServerStatusSchema = z.enum(['online', 'offline'])
+export type ServerStatus = z.infer<typeof ServerStatusSchema>
 
-export interface Container {
-  name: string
-  image: string
-  status: string
-  cpuPct: number | null
-  memPct: number | null
-}
+export const SeveritySchema = z.enum(['info', 'warning', 'critical'])
+export type Severity = z.infer<typeof SeveritySchema>
 
-export interface Service {
-  name: string
-  active: boolean
-}
+export const MetricsSchema = z.strictObject({
+  cpu: finite,
+  cpuUser: finite,
+  cpuSystem: finite,
+  cpuIowait: finite,
+  mem: finite,
+  memAvailableBytes: nonNegativeInteger,
+  memCacheBytes: nonNegativeInteger,
+  memBuffersBytes: nonNegativeInteger,
+  swapUsedBytes: nonNegativeInteger,
+  swapTotalBytes: nonNegativeInteger,
+  load1: finite,
+  load5: finite,
+  load15: finite,
+  uptimeSec: nonNegativeInteger,
+  disk: finite,
+  rxBytes: nonNegativeInteger,
+  txBytes: nonNegativeInteger,
+  rxRate: finite.nonnegative(),
+  txRate: finite.nonnegative(),
+  timestamp,
+})
+export type Metrics = z.infer<typeof MetricsSchema>
 
-export interface Fail2banJail {
-  name: string
-  banned: number
-  total: number
-}
+export const ContainerSchema = z.strictObject({
+  name: z.string(),
+  image: z.string(),
+  status: z.string(),
+  cpuPct: finite.nullable(),
+  memPct: finite.nullable(),
+})
+export type Container = z.infer<typeof ContainerSchema>
 
-export interface BackupInfo {
-  lastRun: string | null
-  nextRun: string | null
-  count: number
-  latest: string | null
-  newestEpoch: number | null
-  failed: boolean | null
-}
+export const ServiceSchema = z.strictObject({ name: z.string(), active: z.boolean() })
+export type Service = z.infer<typeof ServiceSchema>
 
-export interface HealthCheck {
-  url: string
-  ok: boolean
-  latencyMs: number
-  status: string
-}
+export const Fail2banJailSchema = z.strictObject({
+  name: z.string(),
+  banned: nonNegativeInteger,
+  total: nonNegativeInteger,
+  bannedIps: z.array(z.string()),
+})
+export type Fail2banJail = z.infer<typeof Fail2banJailSchema>
 
-export interface DiskMount {
-  fs: string
-  size: string
-  used: string
-  avail: string
-  pct: number
-  mount: string
-}
+export const BackupInfoSchema = z.strictObject({
+  lastRun: z.string().nullable(),
+  nextRun: z.string().nullable(),
+  count: nonNegativeInteger,
+  latest: z.string().nullable(),
+  newestEpoch: integer.nullable(),
+  failed: z.boolean().nullable(),
+})
+export type BackupInfo = z.infer<typeof BackupInfoSchema>
 
-export interface DockerRow {
-  count: number
-  size: string
-}
+export const HealthCheckSchema = z.strictObject({
+  url: z.string(),
+  ok: z.boolean(),
+  latencyMs: nonNegativeInteger,
+  status: z.string(),
+})
+export type HealthCheck = z.infer<typeof HealthCheckSchema>
 
-export interface DockerUsage {
-  images: DockerRow
-  containers: DockerRow
-  volumes: DockerRow
-  buildCache: DockerRow
-}
+export const DiskMountSchema = z.strictObject({
+  fs: z.string(),
+  type: z.string(),
+  size: z.string(),
+  used: z.string(),
+  avail: z.string(),
+  pct: finite,
+  mount: z.string(),
+})
+export type DiskMount = z.infer<typeof DiskMountSchema>
 
-export interface AptUpgrades {
-  count: number
-  packages: string[]
-}
+export const DockerRowSchema = z.strictObject({ count: nonNegativeInteger, size: z.string() })
+export type DockerRow = z.infer<typeof DockerRowSchema>
 
-export interface TlsCert {
-  host: string
-  subject: string
-  issuer: string
-  notAfter: string
-  daysLeft: number
-  fingerprint: string
-}
+export const DockerUsageSchema = z.strictObject({
+  images: DockerRowSchema,
+  containers: DockerRowSchema,
+  volumes: DockerRowSchema,
+  buildCache: DockerRowSchema,
+})
+export type DockerUsage = z.infer<typeof DockerUsageSchema>
 
-export interface TcpPort {
-  port: number
-  proto: string
-  local: string
-  process: string | null
-  exposed: boolean
-}
+export const AptUpgradesSchema = z.strictObject({
+  count: nonNegativeInteger,
+  packages: z.array(z.string()),
+})
+export type AptUpgrades = z.infer<typeof AptUpgradesSchema>
 
-export interface SshLogin {
-  time: string
-  ok: boolean
-  user: string
-  from: string
-}
+export const TlsCertSchema = z.strictObject({
+  host: z.string(),
+  subject: z.string(),
+  issuer: z.string(),
+  notAfter: timestamp,
+  daysLeft: integer,
+  fingerprint: z.string(),
+})
+export type TlsCert = z.infer<typeof TlsCertSchema>
 
-export interface UfwRule {
-  to: string
-  action: string
-  from: string
-}
+export const TcpPortSchema = z.strictObject({
+  port: nonNegativeInteger,
+  proto: z.string(),
+  local: z.string(),
+  process: z.string().nullable(),
+  exposed: z.boolean(),
+})
+export type TcpPort = z.infer<typeof TcpPortSchema>
 
-export interface IptablesRule {
-  pkts: number
-  bytes: number
-  target: string
-  proto: string
-  source: string
-  dest: string
-}
+export const SshLoginSchema = z.strictObject({
+  time: z.string(),
+  ok: z.boolean(),
+  user: z.string(),
+  from: z.string(),
+})
+export type SshLogin = z.infer<typeof SshLoginSchema>
 
-export interface Firewall {
-  active: boolean
-  rules: UfwRule[]
-  iptables: IptablesRule[]
-}
+export const UfwRuleSchema = z.strictObject({
+  to: z.string(),
+  action: z.string(),
+  from: z.string(),
+})
+export type UfwRule = z.infer<typeof UfwRuleSchema>
 
-export interface VnstatDay {
-  date: string
-  rx: number
-  tx: number
-}
+export const IptablesRuleSchema = z.strictObject({
+  pkts: nonNegativeInteger,
+  bytes: nonNegativeInteger,
+  target: z.string(),
+  proto: z.string(),
+  source: z.string(),
+  dest: z.string(),
+})
+export type IptablesRule = z.infer<typeof IptablesRuleSchema>
 
-export interface NetIface {
-  name: string
-  rx: number
-  tx: number
-}
+export const FirewallSchema = z.strictObject({
+  active: z.boolean(),
+  rules: z.array(UfwRuleSchema),
+  iptables: z.array(IptablesRuleSchema),
+})
+export type Firewall = z.infer<typeof FirewallSchema>
 
-export interface Fingerprint {
-  file: string
-  algo: string
-  hash: string
-}
+export const VnstatDaySchema = z.strictObject({
+  date: z.string(),
+  rx: nonNegativeInteger,
+  tx: nonNegativeInteger,
+})
+export type VnstatDay = z.infer<typeof VnstatDaySchema>
 
-export interface M3u8Job {
-  title: string
-  status: string
-  progress: number
-  total: number
-  updated: string
-}
+export const NetIfaceSchema = z.strictObject({
+  name: z.string(),
+  rx: nonNegativeInteger,
+  tx: nonNegativeInteger,
+})
+export type NetIface = z.infer<typeof NetIfaceSchema>
 
-export interface M3u8Queue {
-  health: string | null
-  counts: Record<string, number>
-  recent: M3u8Job[]
-}
+export const FingerprintSchema = z.strictObject({
+  file: z.string(),
+  algo: z.string(),
+  hash: z.string(),
+})
+export type Fingerprint = z.infer<typeof FingerprintSchema>
 
-export interface GiteaInfo {
-  health: string | null
-  repos: number | null
-  users: number | null
-  activeWeek: number | null
-  lastPush: number | null
-}
+export const M3u8JobSchema = z.strictObject({
+  title: z.string(),
+  status: z.string(),
+  progress: nonNegativeInteger,
+  total: nonNegativeInteger,
+  updated: z.string(),
+})
+export type M3u8Job = z.infer<typeof M3u8JobSchema>
 
-export interface CaddyLogs {
-  sizeBytes: number
-  lines: number | null
-  mtime: string
-  growthBps: number
-}
+export const M3u8QueueSchema = z.strictObject({
+  health: z.string().nullable(),
+  counts: z.record(z.string(), nonNegativeInteger),
+  recent: z.array(M3u8JobSchema),
+})
+export type M3u8Queue = z.infer<typeof M3u8QueueSchema>
 
-export interface Alert {
-  key: string
-  severity: Severity
-  message: string
-  since: string
-}
+export const GiteaInfoSchema = z.strictObject({
+  health: z.string().nullable(),
+  repos: nonNegativeInteger.nullable(),
+  users: nonNegativeInteger.nullable(),
+  activeWeek: nonNegativeInteger.nullable(),
+  lastActivity: integer.nullable(),
+})
+export type GiteaInfo = z.infer<typeof GiteaInfoSchema>
 
-export interface AlertPayload extends Alert {
-  state: 'fired' | 'resolved'
-}
+export const CaddyLogsSchema = z.strictObject({
+  sizeBytes: nonNegativeInteger,
+  mtime: timestamp,
+  growthBps: finite.nonnegative(),
+})
+export type CaddyLogs = z.infer<typeof CaddyLogsSchema>
 
-export interface ServerState {
-  id: string
-  name: string
-  status: ServerStatus
-  metrics: Metrics | null
-  containers: Container[]
-  services: Service[]
-  fail2ban: Fail2banJail[]
-  backup: BackupInfo | null
-  health: HealthCheck[]
-  disks: DiskMount[]
-  dockerUsage: DockerUsage | null
-  apt: AptUpgrades | null
-  tlsCerts: TlsCert[]
-  ports: TcpPort[]
-  sshLogins: SshLogin[]
-  firewall: Firewall | null
-  vnstatDays: VnstatDay[]
-  netIfaces: NetIface[]
-  fingerprints: Fingerprint[]
-  m3u8: M3u8Queue | null
-  gitea: GiteaInfo | null
-  caddy: CaddyLogs | null
-  alerts: Alert[]
-  sectionErrors: Record<string, string>
-  lastError: string | null
-  updatedAt: string
-}
+export const AlertSchema = z.strictObject({
+  key: z.string(),
+  severity: SeveritySchema,
+  message: z.string(),
+  since: timestamp,
+})
+export type Alert = z.infer<typeof AlertSchema>
 
-export interface HealthInfo {
-  status: string
-  servers: number
-  online: number
-}
+export const AlertPayloadSchema = z.strictObject({
+  ...AlertSchema.shape,
+  timestamp,
+  state: z.enum(['fired', 'resolved']),
+})
+export type AlertPayload = z.infer<typeof AlertPayloadSchema>
 
-export interface EventRow {
-  ts: string
-  server: string
-  type: string
-  severity: Severity
-  state: string
-  message: string
-}
+export const AlertConfigSchema = z.strictObject({
+  diskPct: finite,
+  memPct: finite,
+  cpuPct: finite,
+  cpuSustainSec: nonNegativeInteger,
+  tlsMinDays: nonNegativeInteger,
+  healthMaxFails: nonNegativeInteger,
+  backupMaxAgeHours: nonNegativeInteger,
+  cooldownSec: nonNegativeInteger,
+})
+export type AlertConfig = z.infer<typeof AlertConfigSchema>
 
-export interface CaddySample {
-  ts: string
-  size: number
-  lines: number | null
-}
+export const CollectionConfigSchema = z.strictObject({
+  fullIntervalSec: nonNegativeInteger,
+  timeoutSec: nonNegativeInteger,
+  retentionDays: nonNegativeInteger,
+  backoffMaxSec: nonNegativeInteger,
+})
+export type CollectionConfig = z.infer<typeof CollectionConfigSchema>
 
-export type WsMessage =
-  | { type: 'snapshot'; servers: ServerState[] }
-  | { type: 'metrics'; server: string; data: Metrics }
-  | { type: 'status'; server: string; data: ServerStatus }
-  | { type: 'alert'; server: string; data: AlertPayload }
+export const ServerStateSchema = z.strictObject({
+  id: z.string(),
+  name: z.string(),
+  status: ServerStatusSchema,
+  metrics: MetricsSchema.nullable(),
+  containers: z.array(ContainerSchema),
+  services: z.array(ServiceSchema),
+  fail2ban: z.array(Fail2banJailSchema),
+  backup: BackupInfoSchema.nullable(),
+  health: z.array(HealthCheckSchema),
+  disks: z.array(DiskMountSchema),
+  dockerUsage: DockerUsageSchema.nullable(),
+  apt: AptUpgradesSchema.nullable(),
+  tlsCerts: z.array(TlsCertSchema),
+  ports: z.array(TcpPortSchema),
+  sshLogins: z.array(SshLoginSchema),
+  firewall: FirewallSchema.nullable(),
+  vnstatDays: z.array(VnstatDaySchema),
+  netIfaces: z.array(NetIfaceSchema),
+  fingerprints: z.array(FingerprintSchema),
+  m3u8: M3u8QueueSchema.nullable(),
+  gitea: GiteaInfoSchema.nullable(),
+  caddy: CaddyLogsSchema.nullable(),
+  alerts: z.array(AlertSchema),
+  sectionErrors: z.record(z.string(), z.string()),
+  lastError: z.string().nullable(),
+  updatedAt: timestamp,
+})
+export type ServerState = z.infer<typeof ServerStateSchema>
+
+export const HealthInfoSchema = z.strictObject({
+  status: z.string(),
+  servers: nonNegativeInteger,
+  online: nonNegativeInteger,
+  alerts: AlertConfigSchema,
+  collection: CollectionConfigSchema,
+})
+export type HealthInfo = z.infer<typeof HealthInfoSchema>
+
+export const EventRowSchema = z.strictObject({
+  ts: timestamp,
+  server: z.string(),
+  type: z.string(),
+  severity: SeveritySchema,
+  state: z.string(),
+  message: z.string(),
+})
+export type EventRow = z.infer<typeof EventRowSchema>
+
+export const CaddySampleSchema = z.strictObject({ ts: timestamp, size: nonNegativeInteger })
+export type CaddySample = z.infer<typeof CaddySampleSchema>
+
+export const WsMessageSchema = z.discriminatedUnion('type', [
+  z.strictObject({ type: z.literal('snapshot'), servers: z.array(ServerStateSchema) }),
+  z.strictObject({ type: z.literal('server'), server: z.string(), data: ServerStateSchema }),
+  z.strictObject({ type: z.literal('status'), server: z.string(), data: ServerStatusSchema }),
+  z.strictObject({ type: z.literal('alert'), server: z.string(), data: AlertPayloadSchema }),
+])
+export type WsMessage = z.infer<typeof WsMessageSchema>
+
+export const ContractBundleSchema = z.strictObject({
+  health: HealthInfoSchema,
+  servers: z.array(ServerStateSchema),
+  containers: z.array(ContainerSchema),
+  services: z.array(ServiceSchema),
+  fail2ban: z.array(Fail2banJailSchema),
+  backup: BackupInfoSchema.nullable(),
+  history: z.array(MetricsSchema),
+  caddy: z.array(CaddySampleSchema),
+  events: z.array(EventRowSchema),
+  ws: z.array(WsMessageSchema),
+})
+export type ContractBundle = z.infer<typeof ContractBundleSchema>

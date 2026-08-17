@@ -3,20 +3,5 @@
   "identifier": "default",
   "description": "Permissions for the main window",
   "windows": ["main"],
-  "permissions": [
-    "core:default",
-    {
-      "identifier": "shell:allow-execute",
-      "allow": [
-        {
-          "name": "monitor-backend",
-          "sidecar": true,
-          "args": [
-            { "args": ["--token", "true"] },
-            { "args": ["--config", "true"] }
-          ]
-        }
-      ]
-    }
-  ]
+  "permissions": ["core:default", "updater:default", "process:default"]
 }

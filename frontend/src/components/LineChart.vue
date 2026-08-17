@@ -2,11 +2,11 @@
 import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import * as echarts from 'echarts/core'
 import { LineChart as ELineChart } from 'echarts/charts'
-import { GridComponent, TooltipComponent } from 'echarts/components'
+import { GridComponent, LegendComponent, TooltipComponent } from 'echarts/components'
 import { CanvasRenderer } from 'echarts/renderers'
 import { lineOption, type SeriesSpec } from '../lib/chartTheme'
 
-echarts.use([ELineChart, GridComponent, TooltipComponent, CanvasRenderer])
+echarts.use([ELineChart, GridComponent, LegendComponent, TooltipComponent, CanvasRenderer])
 
 const props = withDefaults(
   defineProps<{
@@ -28,7 +28,7 @@ function render() {
   if (props.min != null || props.max != null) {
     Object.assign(opt.yAxis as object, { min: props.min ?? undefined, max: props.max ?? undefined })
   }
-  chart.setOption(opt)
+  chart.setOption(opt, { notMerge: true, lazyUpdate: true })
 }
 
 onMounted(() => {

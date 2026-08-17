@@ -1,7 +1,15 @@
 import { defineStore } from 'pinia'
 import { ref, shallowRef } from 'vue'
 import { apiGet, openWebSocket } from '../api/client'
-import type { EventRow, ServerState, WsMessage } from '../types'
+import {
+  HealthInfoSchema,
+  ServerStateSchema,
+  WsMessageSchema,
+  type EventRow,
+  type HealthInfo,
+  type ServerState,
+  type WsMessage,
+} from '../types'
 
 const MAX_LIVE_EVENTS = 250
 
@@ -9,11 +17,13 @@ export const useServersStore = defineStore('servers', () => {
   const servers = shallowRef<ServerState[]>([])
   const byId = new Map<string, ServerState>()
   const connected = ref(false)
+  const healthInfo = shallowRef<HealthInfo | null>(null)
   const lastError = ref<string | null>(null)
   // Live events assembled from WS messages (status transitions + alerts).
   const liveEvents = ref<EventRow[]>([])
   let ws: WebSocket | null = null
   let reconnectTimer: number | undefined
+  let reconnectAttempts = 0
 
   function pushEvent(row: EventRow) {
     liveEvents.value = [row, ...liveEvents.value].slice(0, MAX_LIVE_EVENTS)
@@ -24,9 +34,8 @@ export const useServersStore = defineStore('servers', () => {
       byId.clear()
       for (const s of msg.servers) byId.set(s.id, s)
       servers.value = [...byId.values()]
-    } else if (msg.type === 'metrics') {
-      const s = byId.get(msg.server)
-      if (s) s.metrics = msg.data
+    } else if (msg.type === 'server') {
+      byId.set(msg.server, msg.data)
       servers.value = [...byId.values()]
     } else if (msg.type === 'status') {
       const s = byId.get(msg.server)
@@ -55,7 +64,7 @@ export const useServersStore = defineStore('servers', () => {
         servers.value = [...byId.values()]
       }
       pushEvent({
-        ts: d.since,
+        ts: d.timestamp,
         server: msg.server,
         type: 'alert',
         severity: d.severity,
@@ -67,10 +76,12 @@ export const useServersStore = defineStore('servers', () => {
 
   function scheduleReconnect() {
     if (reconnectTimer) return
+    const delay = Math.min(30_000, 1_000 * 2 ** Math.min(reconnectAttempts, 5))
+    reconnectAttempts += 1
     reconnectTimer = window.setTimeout(() => {
       reconnectTimer = undefined
       connect()
-    }, 3000)
+    }, delay)
   }
 
   function connect() {
@@ -79,22 +90,33 @@ export const useServersStore = defineStore('servers', () => {
       ws.close()
       ws = null
     }
+    connected.value = false
     openWebSocket('/ws')
       .then((socket) => {
         ws = socket
+        socket.onopen = () => {
+          if (ws !== socket) return
+          connected.value = true
+          lastError.value = null
+          reconnectAttempts = 0
+        }
         socket.onmessage = (e) => {
           try {
-            apply(JSON.parse(e.data as string) as WsMessage)
-          } catch {
-            /* ignore malformed frames */
+            apply(WsMessageSchema.parse(JSON.parse(e.data as string)))
+          } catch (err) {
+            lastError.value = err instanceof Error ? err.message : 'Malformed live payload'
           }
         }
         socket.onclose = () => {
+          if (ws !== socket) return
+          ws = null
           connected.value = false
           scheduleReconnect()
         }
-        socket.onerror = () => socket.close()
-        connected.value = true
+        socket.onerror = () => {
+          lastError.value = 'Live connection interrupted'
+          socket.close()
+        }
       })
       .catch((err) => {
         lastError.value = String(err)
@@ -104,15 +126,16 @@ export const useServersStore = defineStore('servers', () => {
 
   async function refresh() {
     try {
-      const list = await apiGet<ServerState[]>('/api/servers')
+      const list = await apiGet('/api/servers', ServerStateSchema.array())
       byId.clear()
       for (const s of list) byId.set(s.id, s)
       servers.value = list
+      healthInfo.value = await apiGet('/api/health', HealthInfoSchema)
       lastError.value = null
     } catch (err) {
       lastError.value = String(err)
     }
   }
 
-  return { servers, connected, lastError, liveEvents, connect, refresh }
+  return { servers, connected, healthInfo, lastError, liveEvents, connect, refresh }
 })

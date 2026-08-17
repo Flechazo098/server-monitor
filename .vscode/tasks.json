@@ -2,50 +2,46 @@
   "version": "2.0.0",
   "presentation": {
     "reveal": "always",
-    "panel": "new"
+    "panel": "dedicated",
+    "clear": true
   },
   "tasks": [
     {
-      "group": {
-        "kind": "build",
-        "isDefault": true
-      },
-      "label": "haskell build",
-      "type": "shell",
-      "command": "cabal build exe:monitor-backend",
-      "options": {
-        "cwd": "backend"
-      }
+      "label": "monitor: check all",
+      "type": "process",
+      "command": "pwsh",
+      "args": ["-NoProfile", "-File", "${workspaceFolder}/scripts/build.ps1", "check"],
+      "group": { "kind": "test", "isDefault": true },
+      "problemMatcher": ["$rustc", "$tsc"]
     },
     {
-      "group": "build",
-      "type": "shell",
-      "label": "haskell clean & build",
-      "command": "cabal clean && cabal build exe:monitor-backend",
-      "options": {
-        "cwd": "backend"
-      }
+      "label": "monitor: build all",
+      "type": "process",
+      "command": "pwsh",
+      "args": ["-NoProfile", "-File", "${workspaceFolder}/scripts/build.ps1", "build"],
+      "group": { "kind": "build", "isDefault": true },
+      "problemMatcher": ["$rustc", "$tsc"]
     },
     {
-      "group": {
-        "kind": "test",
-        "isDefault": true
-      },
-      "type": "shell",
-      "label": "frontend build",
-      "command": "npm run build",
-      "options": {
-        "cwd": "frontend"
-      }
+      "label": "monitor: release bundle",
+      "type": "process",
+      "command": "pwsh",
+      "args": ["-NoProfile", "-File", "${workspaceFolder}/scripts/build.ps1", "bundle"],
+      "problemMatcher": ["$rustc", "$tsc"]
     },
     {
-      "isBackground": true,
-      "type": "shell",
-      "label": "haskell watch",
-      "command": "cabal build --file-watch",
-      "options": {
-        "cwd": "backend"
-      }
+      "label": "monitor: clean",
+      "type": "process",
+      "command": "pwsh",
+      "args": ["-NoProfile", "-File", "${workspaceFolder}/scripts/build.ps1", "clean"],
+      "problemMatcher": []
+    },
+    {
+      "label": "monitor: contract",
+      "type": "process",
+      "command": "pwsh",
+      "args": ["-NoProfile", "-File", "${workspaceFolder}/scripts/build.ps1", "contract"],
+      "problemMatcher": ["$tsc"]
     }
   ]
 }

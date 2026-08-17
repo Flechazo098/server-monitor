@@ -1,0 +1,25 @@
+{
+  "rust-analyzer.linkedProjects": [
+    "${workspaceFolder}/src-tauri/Cargo.toml"
+  ],
+  "rust-analyzer.check.command": "check",
+  "rust-analyzer.cargo.allTargets": true,
+  "typescript.tsdk": "frontend/node_modules/typescript/lib",
+  "typescript.enablePromptUseWorkspaceTsdk": true,
+  "haskell.manageHLS": "GHCup",
+  "haskell.formattingProvider": "ormolu",
+  "files.associations": {
+    "*.cabal": "cabal",
+    "cabal.project": "cabal"
+  },
+  "search.exclude": {
+    "**/dist-newstyle": true,
+    "**/node_modules": true,
+    "**/target": true
+  },
+  "files.watcherExclude": {
+    "**/dist-newstyle/**": true,
+    "**/node_modules/**": true,
+    "**/target/**": true
+  }
+}

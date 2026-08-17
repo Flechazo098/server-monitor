@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { onMounted } from 'vue'
 import { useServersStore } from './stores/servers'
+import UpdatePrompt from './components/UpdatePrompt.vue'
 
 const store = useServersStore()
 onMounted(() => {
@@ -46,5 +47,6 @@ const nav = [
     <main class="content">
       <RouterView />
     </main>
+    <UpdatePrompt />
   </div>
 </template>

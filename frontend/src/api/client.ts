@@ -1,13 +1,35 @@
-// API client for the Haskell monitor backend.
+// API client for the Haskell monitor backend. Every payload is decoded at
+// the language boundary; TypeScript types alone are not treated as proof.
 //
 // In the Tauri shell, the backend port + token are handed over by Rust via
 // the get_backend_info invoke command. In plain-browser dev mode we fall
 // back to VITE_BACKEND_URL (default http://127.0.0.1:8787) with an optional
 // VITE_BACKEND_TOKEN.
 
-export interface BackendInfo {
-  port: number
-  token: string
+import { z, type ZodType } from 'zod'
+import { invoke } from '@tauri-apps/api/core'
+
+const BackendInfoSchema = z.strictObject({
+  port: z.number().int().min(1).max(65535),
+  token: z.string().min(1),
+})
+export type BackendInfo = z.infer<typeof BackendInfoSchema>
+
+export class ContractError extends Error {
+  constructor(source: string, issues: z.core.$ZodIssue[]) {
+    const detail = issues
+      .slice(0, 3)
+      .map((issue) => `${issue.path.join('.') || '<root>'}: ${issue.message}`)
+      .join('; ')
+    super(`Backend contract mismatch at ${source}: ${detail}`)
+    this.name = 'ContractError'
+  }
+}
+
+export function decode<T>(source: string, schema: ZodType<T>, value: unknown): T {
+  const parsed = schema.safeParse(value)
+  if (!parsed.success) throw new ContractError(source, parsed.error.issues)
+  return parsed.data
 }
 
 let cached: BackendInfo | null = null
@@ -18,15 +40,10 @@ declare global {
   }
 }
 
-async function invokeTauri(cmd: string): Promise<unknown> {
-  const { invoke } = await import('@tauri-apps/api/core')
-  return invoke(cmd)
-}
-
 export async function getBackendInfo(): Promise<BackendInfo> {
   if (cached) return cached
   if (window.__TAURI_INTERNALS__) {
-    const info = (await invokeTauri('get_backend_info')) as BackendInfo
+    const info = decode('get_backend_info', BackendInfoSchema, await invoke('get_backend_info'))
     cached = info
     return info
   }
@@ -36,17 +53,19 @@ export async function getBackendInfo(): Promise<BackendInfo> {
   return cached
 }
 
-export async function apiGet<T>(path: string): Promise<T> {
+export async function apiGet<T>(path: string, schema: ZodType<T>): Promise<T> {
   const info = await getBackendInfo()
   const res = await fetch('http://127.0.0.1:' + info.port + path, {
     headers: info.token ? { Authorization: 'Bearer ' + info.token } : undefined,
+    signal: AbortSignal.timeout(10_000),
   })
-  if (!res.ok) throw new Error('GET ' + path + ' -> ' + res.status)
-  return (await res.json()) as T
+  if (!res.ok) throw new Error('Request failed (' + res.status + ')')
+  return decode(path, schema, await res.json())
 }
 
 export async function openWebSocket(path: string): Promise<WebSocket> {
   const info = await getBackendInfo()
-  const url = 'ws://127.0.0.1:' + info.port + path
+  const separator = path.includes('?') ? '&' : '?'
+  const url = 'ws://127.0.0.1:' + info.port + path + separator + 'token=' + encodeURIComponent(info.token)
   return new WebSocket(url)
 }

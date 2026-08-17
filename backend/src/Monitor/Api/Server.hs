@@ -11,15 +11,17 @@ module Monitor.Api.Server
   , runBackend
   , authMiddleware
   , corsMiddleware
+  , HealthInfo (..)
   ) where
 
 import Control.Concurrent.STM
-import Control.Exception (SomeException, finally, try)
+import Control.Exception (SomeException, finally, throwIO, try)
 import Control.Monad (forever, void)
 import Control.Monad.IO.Class (liftIO)
 import Data.Aeson (ToJSON (..), object, (.=))
 import qualified Data.Aeson as Aeson
 import qualified Data.ByteString.Char8 as BC
+import qualified Data.ByteString.Lazy as BL
 import qualified Data.Map.Strict as Map
 import Data.Maybe (fromMaybe)
 import Data.Tagged ()
@@ -35,7 +37,7 @@ import Monitor.Storage.SQLite
   )
 import Network.HTTP.Types (status204, status401, status403, status404)
 import Network.Socket
-import Network.Wai (Request, mapResponseHeaders, pathInfo, requestHeaders, requestMethod, responseLBS)
+import Network.Wai (Request, mapResponseHeaders, pathInfo, queryString, requestHeaders, requestMethod, responseLBS)
 import Network.Wai.Handler.Warp
   ( defaultSettings
   , runSettingsSocket
@@ -45,6 +47,7 @@ import Network.Wai.Handler.Warp
 import Network.Wai.Handler.WebSockets (websocketsOr)
 import Network.WebSockets
   ( PendingConnection
+  , Connection
   , acceptRequest
   , defaultConnectionOptions
   , sendClose
@@ -53,6 +56,7 @@ import Network.WebSockets
   )
 import Servant
 import System.IO (hFlush, stdout)
+import System.Timeout (timeout)
 
 -- ---------------------------------------------------------------------------
 -- API type
@@ -75,6 +79,8 @@ data HealthInfo = HealthInfo
   { hiStatus  :: Text
   , hiServers :: Int
   , hiOnline  :: Int
+  , hiAlerts  :: AlertConfig
+  , hiCollection :: CollectionConfig
   }
   deriving (Show)
 
@@ -83,6 +89,8 @@ instance ToJSON HealthInfo where
     [ "status" .= hiStatus h
     , "servers" .= hiServers h
     , "online" .= hiOnline h
+    , "alerts" .= hiAlerts h
+    , "collection" .= hiCollection h
     ]
 
 -- ---------------------------------------------------------------------------
@@ -99,7 +107,13 @@ apiServer st =
       states <- liftIO (readTVarIO (serverStates st))
       let servers = Map.size states
           online = length (filter ((== Online) . ssStatus) (Map.elems states))
-      pure HealthInfo { hiStatus = "ok", hiServers = servers, hiOnline = online }
+      pure HealthInfo
+        { hiStatus = "ok"
+        , hiServers = servers
+        , hiOnline = online
+        , hiAlerts = alertConfig st
+        , hiCollection = collectionConfig st
+        }
 
     serversH :: Handler [ServerState]
     serversH = liftIO (Map.elems <$> readTVarIO (serverStates st))
@@ -124,16 +138,16 @@ apiServer st =
     backupH sid = ssBackup <$> getState sid
 
     historyH :: Maybe Text -> Maybe Int -> Handler [Metrics]
-    historyH mSid mHours =
-      let sid = fromMaybe "" mSid
-          hours = fromMaybe 24 mHours
-      in liftIO (loadHistory (dbPath st) (ServerId sid) hours)
+    historyH mSid mHours = do
+      sid <- maybe (throwError err400 { errBody = "missing server query parameter" }) pure mSid
+      void (getState sid)
+      liftIO (loadHistory (dbPath st) (ServerId sid) (fromMaybe 24 mHours))
 
     caddyH :: Maybe Text -> Maybe Int -> Handler [CaddySample]
-    caddyH mSid mHours =
-      let sid = fromMaybe "" mSid
-          hours = fromMaybe 24 mHours
-      in liftIO (loadCaddyStats (dbPath st) (ServerId sid) hours)
+    caddyH mSid mHours = do
+      sid <- maybe (throwError err400 { errBody = "missing server query parameter" }) pure mSid
+      void (getState sid)
+      liftIO (loadCaddyStats (dbPath st) (ServerId sid) (fromMaybe 24 mHours))
 
     eventsH :: Maybe Int -> Handler [EventRow]
     eventsH mLimit = liftIO (loadRecentEvents (dbPath st) (fromMaybe 50 mLimit))
@@ -154,12 +168,19 @@ wsHandler st pending = do
         ]
   finally
     ( withPingThread conn 30 (pure ()) $ do
-        sendTextData conn (Aeson.encode snapshot)
+        sendFrame conn (Aeson.encode snapshot)
         forever $ do
           ev <- atomically (readTChan chan)
-          sendTextData conn (Aeson.encode ev)
+          sendFrame conn (Aeson.encode ev)
     )
     (void (try (sendClose conn ("bye" :: BC.ByteString)) :: IO (Either SomeException ())))
+
+sendFrame :: Connection -> BL.ByteString -> IO ()
+sendFrame conn payload = do
+  sent <- timeout (5 * 1000000) (sendTextData conn payload)
+  case sent of
+    Just () -> pure ()
+    Nothing -> throwIO (userError "websocket client is not consuming frames")
 
 notFoundWs :: Application
 notFoundWs _ respond = respond (responseLBS status404 [] "websocket upgrade required")
@@ -221,17 +242,20 @@ corsMiddleware inner req respond =
 -- Token auth middleware
 -- ---------------------------------------------------------------------------
 
--- | Rejects requests without a matching @Authorization: Bearer <token>@.
--- The WebSocket endpoint is exempt: browsers cannot set WS headers, and the
--- stream only carries read-only metrics.
+-- | Reject requests without a matching bearer token. Browser WebSockets
+-- authenticate with a query token because the API does not expose custom
+-- WebSocket headers.
 authMiddleware :: Text -> Application -> Application
 authMiddleware token inner req respond =
-  case pathInfo req of
-    ("ws" : _) -> inner req respond
-    _ ->
-      case lookup "authorization" (requestHeaders req) of
-        Just hdr | BC.unpack hdr == ("Bearer " <> T.unpack token) -> inner req respond
-        _ -> respond (responseLBS status401 [] "unauthorized")
+  if bearerAuthorized || wsAuthorized
+    then inner req respond
+    else respond (responseLBS status401 [] "unauthorized")
+  where
+    tokenBytes = BC.pack (T.unpack token)
+    bearerAuthorized = lookup "authorization" (requestHeaders req) == Just ("Bearer " <> tokenBytes)
+    wsAuthorized = case pathInfo req of
+      ("ws" : _) -> lookup "token" (queryString req) == Just (Just tokenBytes)
+      _ -> False
 
 -- ---------------------------------------------------------------------------
 -- Server bootstrap (bind 127.0.0.1:0, print READY port token)
@@ -250,5 +274,4 @@ runBackend st token = do
   hFlush stdout
   let settings = setBeforeMainLoop (pure ()) (setTimeout 30 defaultSettings)
       handlers = corsMiddleware (authMiddleware token (app st))
-  runSettingsSocket settings sock handlers
-  close sock
+  runSettingsSocket settings sock handlers `finally` close sock

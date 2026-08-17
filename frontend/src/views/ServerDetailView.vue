@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { apiGet } from '../api/client'
 import { useServersStore } from '../stores/servers'
@@ -7,15 +7,20 @@ import { CHART } from '../lib/chartTheme'
 import {
   fmtBytes,
   fmtClock,
-  fmtDuration,
   fmtEpoch,
   fmtPct,
   fmtRate,
   fmtDateTime,
+  healthState,
   levelFor,
   tlsLevel,
 } from '../lib/format'
-import type { CaddySample, ServerState } from '../types'
+import {
+  CaddySampleSchema,
+  MetricsSchema,
+  type CaddySample,
+  type ServerState,
+} from '../types'
 import LineChart from '../components/LineChart.vue'
 import MeterBar from '../components/MeterBar.vue'
 import StatusChip from '../components/StatusChip.vue'
@@ -24,6 +29,7 @@ import EmptyState from '../components/EmptyState.vue'
 
 const route = useRoute()
 const store = useServersStore()
+const thresholds = computed(() => store.healthInfo?.alerts)
 const tab = ref('overview')
 
 const server = computed<ServerState | null>(
@@ -33,18 +39,55 @@ const metrics = computed(() => server.value?.metrics ?? null)
 
 // Live chart buffers fed by WS metric updates.
 const MAX_POINTS = 240
+const point = (timestamp: string, value: number): [string, number] => [timestamp, value]
 const cpuHist = ref<[string, number][]>([])
-const memHist = ref<[string, number][]>([])
+const cpuUserHist = ref<[string, number][]>([])
+const cpuSystemHist = ref<[string, number][]>([])
+const cpuIowaitHist = ref<[string, number][]>([])
 const netHist = ref<{ rx: [string, number][]; tx: [string, number][] }>({ rx: [], tx: [] })
+watch(
+  () => server.value?.id,
+  (id) => {
+    cpuHist.value = []
+    cpuUserHist.value = []
+    cpuSystemHist.value = []
+    cpuIowaitHist.value = []
+    netHist.value = { rx: [], tx: [] }
+    if (id) loadTelemetry(id)
+  },
+)
+
+async function loadTelemetry(serverId: string) {
+  try {
+    const rows = await apiGet(
+      '/api/history?server=' + encodeURIComponent(serverId) + '&hours=1',
+      MetricsSchema.array(),
+    )
+    if (server.value?.id !== serverId) return
+    const recent = rows.slice(-MAX_POINTS)
+    cpuHist.value = recent.map((m) => point(m.timestamp, m.cpu))
+    cpuUserHist.value = recent.map((m) => point(m.timestamp, m.cpuUser))
+    cpuSystemHist.value = recent.map((m) => point(m.timestamp, m.cpuSystem))
+    cpuIowaitHist.value = recent.map((m) => point(m.timestamp, m.cpuIowait))
+    netHist.value = {
+      rx: recent.map((m) => point(m.timestamp, m.rxRate)),
+      tx: recent.map((m) => point(m.timestamp, m.txRate)),
+    }
+  } catch {
+    // Live samples still populate the charts when history is unavailable.
+  }
+}
 watch(
   metrics,
   (m) => {
     if (!m) return
-    cpuHist.value = [...cpuHist.value, [m.timestamp, m.cpu]].slice(-MAX_POINTS)
-    memHist.value = [...memHist.value, [m.timestamp, m.mem]].slice(-MAX_POINTS)
+    cpuHist.value = [...cpuHist.value, point(m.timestamp, m.cpu)].slice(-MAX_POINTS)
+    cpuUserHist.value = [...cpuUserHist.value, point(m.timestamp, m.cpuUser)].slice(-MAX_POINTS)
+    cpuSystemHist.value = [...cpuSystemHist.value, point(m.timestamp, m.cpuSystem)].slice(-MAX_POINTS)
+    cpuIowaitHist.value = [...cpuIowaitHist.value, point(m.timestamp, m.cpuIowait)].slice(-MAX_POINTS)
     netHist.value = {
-      rx: [...netHist.value.rx, [m.timestamp, m.rxRate]].slice(-MAX_POINTS),
-      tx: [...netHist.value.tx, [m.timestamp, m.txRate]].slice(-MAX_POINTS),
+      rx: [...netHist.value.rx, point(m.timestamp, m.rxRate)].slice(-MAX_POINTS),
+      tx: [...netHist.value.tx, point(m.timestamp, m.txRate)].slice(-MAX_POINTS),
     }
   },
   { immediate: true },
@@ -52,12 +95,14 @@ watch(
 
 const caddyHist = ref<CaddySample[]>([])
 const caddyLoading = ref(false)
+watch(() => server.value?.id, () => { caddyHist.value = [] })
 async function loadCaddy() {
   if (!server.value) return
   caddyLoading.value = true
   try {
-    caddyHist.value = await apiGet<CaddySample[]>(
+    caddyHist.value = await apiGet(
       '/api/caddy?server=' + encodeURIComponent(server.value.id) + '&hours=168',
+      CaddySampleSchema.array(),
     )
   } catch {
     caddyHist.value = []
@@ -93,7 +138,7 @@ const m3u8Counts = computed(() => {
   return q ? Object.entries(q.counts).sort((a, b) => b[1] - a[1]) : []
 })
 
-function m3u8JobKind(status: string): 'ok' | 'warn' | 'crit' | 'off' {
+function m3u8JobKind(status: string): 'ok' | 'warn' | 'crit' | 'off' | 'info' {
   if (status === 'done' || status === 'completed') return 'ok'
   if (status === 'running' || status === 'queued' || status === 'pending') return 'info'
   if (status === 'failed' || status === 'error' || status === 'interrupted') return 'crit'
@@ -102,6 +147,10 @@ function m3u8JobKind(status: string): 'ok' | 'warn' | 'crit' | 'off' {
 
 const sectionErrors = computed(() => Object.entries(server.value?.sectionErrors ?? {}))
 const loadRow = computed(() => metrics.value ? metrics.value.load1.toFixed(2) + ' / ' + metrics.value.load5.toFixed(2) + ' / ' + metrics.value.load15.toFixed(2) : '—')
+const swapPct = computed(() => {
+  const m = metrics.value
+  return m && m.swapTotalBytes > 0 ? (m.swapUsedBytes / m.swapTotalBytes) * 100 : 0
+})
 </script>
 
 <template>
@@ -111,7 +160,7 @@ const loadRow = computed(() => metrics.value ? metrics.value.load1.toFixed(2) + 
         <h1 class="page-title">
           <RouterLink to="/servers" class="dim"><UiIcon name="back" :size="15" /></RouterLink>
           {{ server?.name ?? 'Server' }}
-          <StatusChip v-if="server" :kind="server.status" :label="server.status" dot style="vertical-align: 2px; margin-left: 8px" />
+          <StatusChip v-if="server" :kind="healthState(server.status, server.alerts).kind" :label="healthState(server.status, server.alerts).label" dot style="vertical-align: 2px; margin-left: 8px" />
         </h1>
         <p class="page-sub">
           <span v-if="server">last collection {{ fmtClock(server.updatedAt) }} · {{ Object.keys(server.sectionErrors).length }} failed section(s)</span>
@@ -142,21 +191,33 @@ const loadRow = computed(() => metrics.value ? metrics.value.load1.toFixed(2) + 
 
       <!-- ============ OVERVIEW ============ -->
       <div v-if="tab === 'overview'" class="stack">
+        <div v-if="metrics" class="resource-strip">
+          <div><span>CPU total</span><strong>{{ fmtPct(metrics.cpu) }}</strong></div>
+          <div><span>User / system / IO</span><strong>{{ fmtPct(metrics.cpuUser) }} / {{ fmtPct(metrics.cpuSystem) }} / {{ fmtPct(metrics.cpuIowait) }}</strong></div>
+          <div><span>Memory used</span><strong>{{ fmtPct(metrics.mem) }}</strong></div>
+          <div><span>Available / cache</span><strong>{{ fmtBytes(metrics.memAvailableBytes) }} / {{ fmtBytes(metrics.memCacheBytes) }}</strong></div>
+          <div><span>Buffers</span><strong>{{ fmtBytes(metrics.memBuffersBytes) }}</strong></div>
+          <div><span>Swap</span><strong :class="swapPct > 50 ? 'warn-text' : ''">{{ fmtBytes(metrics.swapUsedBytes) }} / {{ fmtBytes(metrics.swapTotalBytes) }}</strong></div>
+        </div>
         <div class="grid-2-1">
-          <Panel title="CPU · memory · load (live)">
+          <Panel title="CPU composition · live">
             <LineChart
               :series="[
-                { name: 'CPU %', data: cpuHist, color: CHART.cpu, area: true },
-                { name: 'MEM %', data: memHist, color: CHART.mem },
+                { name: 'total', data: cpuHist, color: CHART.cpu, area: true, unit: '%' },
+                { name: 'user', data: cpuUserHist, color: CHART.cpuUser, unit: '%' },
+                { name: 'system', data: cpuSystemHist, color: CHART.cpuSystem, unit: '%' },
+                { name: 'iowait', data: cpuIowaitHist, color: CHART.cpuIowait, unit: '%' },
               ]"
               height="220px"
+              :min="0"
+              :max="100"
             />
           </Panel>
           <Panel title="Network throughput (live)">
             <LineChart
               :series="[
-                { name: 'rx', data: netHist.rx, color: CHART.rx, area: true },
-                { name: 'tx', data: netHist.tx, color: CHART.tx },
+                { name: 'rx', data: netHist.rx, color: CHART.rx, area: true, unit: 'B/s' },
+                { name: 'tx', data: netHist.tx, color: CHART.tx, unit: 'B/s' },
               ]"
               height="220px"
             />
@@ -168,7 +229,7 @@ const loadRow = computed(() => metrics.value ? metrics.value.load1.toFixed(2) + 
             <template v-if="server.ports.length">
               <table class="tbl">
                 <thead>
-                  <tr><th>Port</th><th>Proto</th><th>Bound to</th><th>Process</th><th>Exposure</th></tr>
+                  <tr><th>Port</th><th>Proto</th><th>Bound to</th><th>Process</th><th>Bind scope</th></tr>
                 </thead>
                 <tbody>
                   <tr v-for="p in server.ports.slice(0, 30)" :key="p.proto + p.local">
@@ -177,8 +238,8 @@ const loadRow = computed(() => metrics.value ? metrics.value.load1.toFixed(2) + 
                     <td class="mono">{{ p.local }}</td>
                     <td class="mono">{{ p.process ?? '—' }}</td>
                     <td>
-                      <StatusChip v-if="p.exposed" kind="warn" label="exposed" />
-                      <span v-else class="chip off">internal</span>
+                      <StatusChip v-if="p.exposed" kind="warn" label="All interfaces" />
+                      <span v-else class="chip off">Restricted bind</span>
                     </td>
                   </tr>
                 </tbody>
@@ -248,18 +309,19 @@ const loadRow = computed(() => metrics.value ? metrics.value.load1.toFixed(2) + 
           <template v-if="server.disks.length">
             <table class="tbl">
               <thead>
-                <tr><th>Mount</th><th>FS</th><th class="num">Size</th><th class="num">Used</th><th class="num">Avail</th><th style="width: 26%">Usage</th></tr>
+                <tr><th>Mount</th><th>Source</th><th>Type</th><th class="num">Size</th><th class="num">Used</th><th class="num">Avail</th><th style="width: 24%">Usage</th></tr>
               </thead>
               <tbody>
                 <tr v-for="d in server.disks" :key="d.mount">
                   <td class="mono cell-main">{{ d.mount }}</td>
                   <td class="mono dim">{{ d.fs }}</td>
+                  <td class="mono dim">{{ d.type }}</td>
                   <td class="num">{{ d.size }}</td>
                   <td class="num">{{ d.used }}</td>
                   <td class="num">{{ d.avail }}</td>
                   <td>
                     <div class="meter-cell">
-                      <MeterBar :value="d.pct" :level="levelFor('disk', d.pct)" :threshold="80" />
+                      <MeterBar :value="d.pct" :level="levelFor('disk', d.pct, thresholds?.diskPct)" :threshold="thresholds?.diskPct ?? 80" />
                       <span class="num">{{ fmtPct(d.pct) }}</span>
                     </div>
                   </td>
@@ -276,7 +338,7 @@ const loadRow = computed(() => metrics.value ? metrics.value.load1.toFixed(2) + 
               <table class="tbl">
                 <thead><tr><th>Category</th><th class="num">Count</th><th class="num">Size</th></tr></thead>
                 <tbody>
-                  <tr v-for="(row, name) in [
+                  <tr v-for="[name, row] in [
                     ['images', server.dockerUsage.images],
                     ['containers', server.dockerUsage.containers],
                     ['volumes', server.dockerUsage.volumes],
@@ -367,12 +429,18 @@ const loadRow = computed(() => metrics.value ? metrics.value.load1.toFixed(2) + 
           <Panel title="Fail2ban jails" flush>
             <template v-if="server.fail2ban.length">
               <table class="tbl">
-                <thead><tr><th>Jail</th><th class="num">Currently banned</th><th class="num">Total banned</th></tr></thead>
+                <thead><tr><th>Jail</th><th class="num">Current</th><th class="num">Total</th><th>Banned IPs</th></tr></thead>
                 <tbody>
                   <tr v-for="j in server.fail2ban" :key="j.name">
                     <td class="mono">{{ j.name }}</td>
                     <td class="num" :class="j.banned > 0 ? 'warn-text' : ''">{{ j.banned }}</td>
                     <td class="num">{{ j.total }}</td>
+                    <td>
+                      <div v-if="j.bannedIps.length" class="token-list">
+                        <span v-for="ip in j.bannedIps" :key="ip" class="token mono">{{ ip }}</span>
+                      </div>
+                      <span v-else class="faint">—</span>
+                    </td>
                   </tr>
                 </tbody>
               </table>
@@ -416,7 +484,7 @@ const loadRow = computed(() => metrics.value ? metrics.value.load1.toFixed(2) + 
                   <td class="mono dim">{{ c.issuer }}</td>
                   <td class="num">{{ fmtDateTime(c.notAfter) }}</td>
                   <td class="num">
-                    <StatusChip :kind="tlsLevel(c.daysLeft)" :label="c.daysLeft + ' days'" />
+                    <StatusChip :kind="tlsLevel(c.daysLeft, thresholds?.tlsMinDays)" :label="c.daysLeft + ' days'" />
                   </td>
                   <td class="mono">{{ c.fingerprint }}</td>
                 </tr>
@@ -500,7 +568,7 @@ const loadRow = computed(() => metrics.value ? metrics.value.load1.toFixed(2) + 
                 <div class="kv-row"><span class="k">Repositories</span><span class="v">{{ server.gitea.repos ?? '—' }}</span></div>
                 <div class="kv-row"><span class="k">Users</span><span class="v">{{ server.gitea.users ?? '—' }}</span></div>
                 <div class="kv-row"><span class="k">Repos active (7d)</span><span class="v">{{ server.gitea.activeWeek ?? '—' }}</span></div>
-                <div class="kv-row"><span class="k">Last push</span><span class="v">{{ fmtEpoch(server.gitea.lastPush) }}</span></div>
+                <div class="kv-row"><span class="k">Latest repository update</span><span class="v">{{ fmtEpoch(server.gitea.lastActivity) }}</span></div>
               </div>
             </div>
           </template>
@@ -515,7 +583,6 @@ const loadRow = computed(() => metrics.value ? metrics.value.load1.toFixed(2) + 
             <div class="panel-body" style="padding-bottom: 8px">
               <div class="kv">
                 <div class="kv-row"><span class="k">Log size</span><span class="v">{{ fmtBytes(server.caddy.sizeBytes) }}</span></div>
-                <div class="kv-row"><span class="k">Lines</span><span class="v">{{ server.caddy.lines != null ? server.caddy.lines.toLocaleString() : '—' }}</span></div>
                 <div class="kv-row">
                   <span class="k">Growth</span>
                   <span class="v" :class="caddyGrowthPerDay > 0 ? 'warn-text' : 'ok-text'">
@@ -532,6 +599,7 @@ const loadRow = computed(() => metrics.value ? metrics.value.load1.toFixed(2) + 
                     data: caddyHist.map((s) => [s.ts, s.size] as [string, number]),
                     color: CHART.caddy,
                     area: true,
+                    unit: 'bytes',
                   }]"
                   height="200px"
                 />

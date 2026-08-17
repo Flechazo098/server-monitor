@@ -1,6 +1,6 @@
 cabal-version:      3.0
 name:               monitor-backend
-version:            0.2.0.0
+version:            0.1.0.0
 synopsis:           Read-only server monitor backend (Servant + Warp)
 license:            BSD-3-Clause
 build-type:         Simple
@@ -36,7 +36,6 @@ library
     , warp         >=3.3
     , websockets   >=0.12
     , http-types   >=0.12
-    , random       >=1.2
   default-language: Haskell2010
   ghc-options:      -O1
 
@@ -52,7 +51,6 @@ executable monitor-backend
     , directory
     , filepath
     , process
-    , random
     , stm
     , text
     , time
@@ -62,3 +60,33 @@ executable monitor-backend
     , websockets
   default-language: Haskell2010
   ghc-options:      -O1 -threaded -rtsopts
+
+executable monitor-contract
+  hs-source-dirs:   app
+  main-is:          Contract.hs
+  build-depends:
+      base
+    , monitor-backend
+    , aeson
+    , containers
+    , directory
+    , filepath
+    , text
+    , time
+  default-language: Haskell2010
+  ghc-options:      -O1
+
+test-suite monitor-tests
+  type:             exitcode-stdio-1.0
+  hs-source-dirs:   test
+  main-is:          Main.hs
+  build-depends:
+      base
+    , monitor-backend
+    , containers
+    , directory
+    , filepath
+    , text
+    , time
+  default-language: Haskell2010
+  ghc-options:      -Wall

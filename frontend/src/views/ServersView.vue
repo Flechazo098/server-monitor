@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { useServersStore } from '../stores/servers'
-import { fmtClock, fmtDuration, fmtPct, fmtRate, levelFor } from '../lib/format'
+import { fmtClock, fmtDuration, fmtPct, fmtRate, healthState, levelFor } from '../lib/format'
 import MeterBar from '../components/MeterBar.vue'
 import StatusChip from '../components/StatusChip.vue'
 import Panel from '../components/Panel.vue'
@@ -9,6 +9,7 @@ import EmptyState from '../components/EmptyState.vue'
 import type { ServerState } from '../types'
 
 const store = useServersStore()
+const thresholds = computed(() => store.healthInfo?.alerts)
 
 function exposedCount(s: ServerState): number {
   return s.ports.filter((p) => p.exposed).length
@@ -20,6 +21,7 @@ function sectionErrorCount(s: ServerState): number {
   return Object.keys(s.sectionErrors).length
 }
 const totalAlerts = computed(() => store.servers.reduce((acc, s) => acc + s.alerts.length, 0))
+const healthyServers = computed(() => store.servers.filter((s) => healthState(s.status, s.alerts).kind === 'ok').length)
 </script>
 
 <template>
@@ -27,7 +29,7 @@ const totalAlerts = computed(() => store.servers.reduce((acc, s) => acc + s.aler
     <div class="page-head">
       <div>
         <h1 class="page-title">Servers</h1>
-        <p class="page-sub">Live state and operational detail of every monitored host</p>
+        <p class="page-sub">{{ healthyServers }}/{{ store.servers.length }} healthy · {{ totalAlerts }} active alerts</p>
       </div>
       <div class="page-side">
         {{ store.servers.filter((s) => s.status === 'online').length }}/{{ store.servers.length }} online ·
@@ -49,7 +51,7 @@ const totalAlerts = computed(() => store.servers.reduce((acc, s) => acc + s.aler
             <th class="num">Uptime</th>
             <th class="num">Containers</th>
             <th class="num">Listen ports</th>
-            <th class="num">Exposed</th>
+            <th class="num">Wildcard binds</th>
             <th class="num">SSH fails 24h</th>
             <th class="num">apt updates</th>
             <th class="num">Failed sections</th>
@@ -59,17 +61,17 @@ const totalAlerts = computed(() => store.servers.reduce((acc, s) => acc + s.aler
         <tbody>
           <tr v-for="s in store.servers" :key="s.id" class="clickable-row" @click="$router.push('/servers/' + s.id)">
             <td class="cell-main">{{ s.name }}</td>
-            <td><StatusChip :kind="s.status" :label="s.status" dot /></td>
+            <td><StatusChip :kind="healthState(s.status, s.alerts).kind" :label="healthState(s.status, s.alerts).label" dot /></td>
             <template v-if="s.metrics">
               <td>
                 <div class="meter-cell">
-                  <MeterBar :value="s.metrics.cpu" :level="levelFor('cpu', s.metrics.cpu)" :threshold="85" />
+                  <MeterBar :value="s.metrics.cpu" :level="levelFor('cpu', s.metrics.cpu, thresholds?.cpuPct)" :threshold="thresholds?.cpuPct ?? 85" />
                   <span class="num">{{ fmtPct(s.metrics.cpu) }}</span>
                 </div>
               </td>
               <td>
                 <div class="meter-cell">
-                  <MeterBar :value="s.metrics.mem" :level="levelFor('mem', s.metrics.mem)" :threshold="90" />
+                  <MeterBar :value="s.metrics.mem" :level="levelFor('mem', s.metrics.mem, thresholds?.memPct)" :threshold="thresholds?.memPct ?? 90" />
                   <span class="num">{{ fmtPct(s.metrics.mem) }}</span>
                 </div>
               </td>
