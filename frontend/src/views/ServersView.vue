@@ -7,8 +7,10 @@ import StatusChip from '../components/StatusChip.vue'
 import Panel from '../components/Panel.vue'
 import EmptyState from '../components/EmptyState.vue'
 import type { ServerState } from '../types'
+import { useUiText } from '../i18n'
 
 const store = useServersStore()
+const tr = useUiText()
 const thresholds = computed(() => store.healthInfo?.alerts)
 
 function exposedCount(s: ServerState): number {
@@ -28,12 +30,12 @@ const healthyServers = computed(() => store.servers.filter((s) => healthState(s.
   <div>
     <div class="page-head">
       <div>
-        <h1 class="page-title">Servers</h1>
-        <p class="page-sub">{{ healthyServers }}/{{ store.servers.length }} healthy · {{ totalAlerts }} active alerts</p>
+        <h1 class="page-title">{{ tr('Servers') }}</h1>
+        <p class="page-sub">{{ healthyServers }}/{{ store.servers.length }} {{ tr('healthy') }} · {{ totalAlerts }} {{ tr('active alerts') }}</p>
       </div>
       <div class="page-side">
-        {{ store.servers.filter((s) => s.status === 'online').length }}/{{ store.servers.length }} online ·
-        {{ totalAlerts }} active alerts
+        {{ store.servers.filter((s) => s.status === 'online').length }}/{{ store.servers.length }} {{ tr('online') }} ·
+        {{ totalAlerts }} {{ tr('active alerts') }}
       </div>
     </div>
 
@@ -41,21 +43,21 @@ const healthyServers = computed(() => store.servers.filter((s) => healthState(s.
       <table class="tbl">
         <thead>
           <tr>
-            <th>Server</th>
-            <th>Status</th>
+            <th>{{ tr('Server') }}</th>
+            <th>{{ tr('Status') }}</th>
             <th>CPU</th>
-            <th>MEM</th>
+            <th>{{ tr('MEM') }}</th>
             <th class="num">DISK /</th>
-            <th class="num">Load</th>
-            <th class="num">NET rate</th>
-            <th class="num">Uptime</th>
-            <th class="num">Containers</th>
-            <th class="num">Listen ports</th>
-            <th class="num">Wildcard binds</th>
-            <th class="num">SSH fails 24h</th>
-            <th class="num">apt updates</th>
-            <th class="num">Failed sections</th>
-            <th class="num">Updated</th>
+            <th class="num">{{ tr('Load') }}</th>
+            <th class="num">{{ tr('NET rate') }}</th>
+            <th class="num">{{ tr('Uptime') }}</th>
+            <th class="num">{{ tr('Containers') }}</th>
+            <th class="num">{{ tr('Listen ports') }}</th>
+            <th class="num">{{ tr('Wildcard binds') }}</th>
+            <th class="num">{{ tr('SSH fails 24h') }}</th>
+            <th class="num">{{ tr('apt updates') }}</th>
+            <th class="num">{{ tr('Failed sections') }}</th>
+            <th class="num">{{ tr('Updated') }}</th>
           </tr>
         </thead>
         <tbody>
@@ -81,7 +83,7 @@ const healthyServers = computed(() => store.servers.filter((s) => healthState(s.
               <td class="num">{{ fmtDuration(s.metrics.uptimeSec) }}</td>
             </template>
             <template v-else>
-              <td colspan="6" class="faint">no metrics yet</td>
+              <td colspan="6" class="faint">{{ tr('no metrics yet') }}</td>
             </template>
             <td class="num">{{ s.containers.length }}</td>
             <td class="num">{{ s.ports.length }}</td>
@@ -93,7 +95,7 @@ const healthyServers = computed(() => store.servers.filter((s) => healthState(s.
           </tr>
         </tbody>
       </table>
-      <EmptyState v-if="store.servers.length === 0" icon="server" message="No servers — check backend config.json" />
+      <EmptyState v-if="store.servers.length === 0" icon="server" message="No servers — check protected configuration" />
     </Panel>
   </div>
 </template>

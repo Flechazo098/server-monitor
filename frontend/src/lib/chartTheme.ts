@@ -2,18 +2,18 @@
 import type { EChartsOption } from 'echarts'
 
 export const CHART = {
-  cpu: '#d7ff5f',
-  cpuUser: '#58d6c7',
-  cpuSystem: '#8ba4ff',
-  cpuIowait: '#ff6b62',
-  mem: '#ffc857',
-  disk: '#ff6b62',
-  load: '#58d6c7',
-  rx: '#48d6ad',
-  tx: '#bd8cff',
-  caddy: '#d7ff5f',
-  vnstatRx: '#48d6ad',
-  vnstatTx: '#bd8cff',
+  cpu: '#697254',
+  cpuUser: '#3f7764',
+  cpuSystem: '#59758a',
+  cpuIowait: '#aa4e41',
+  mem: '#a86d24',
+  disk: '#aa4e41',
+  load: '#637f7a',
+  rx: '#3f7764',
+  tx: '#7b668b',
+  caddy: '#697254',
+  vnstatRx: '#3f7764',
+  vnstatTx: '#7b668b',
 } as const
 
 export interface SeriesSpec {
@@ -25,10 +25,10 @@ export interface SeriesSpec {
 }
 
 const AXIS = {
-  axisLine: { lineStyle: { color: '#30362c' } },
+  axisLine: { lineStyle: { color: '#c9bca5' } },
   axisTick: { show: false },
-  axisLabel: { color: '#737c6d', fontSize: 10.5, fontFamily: "'Cascadia Code', Consolas, monospace" },
-  splitLine: { lineStyle: { color: '#23281f' } },
+  axisLabel: { color: '#887e6d', fontSize: 10.5, fontFamily: "'Cascadia Code', Consolas, monospace" },
+  splitLine: { lineStyle: { color: '#e2d7c4' } },
 }
 
 export function lineOption(series: SeriesSpec[]): EChartsOption {
@@ -40,10 +40,10 @@ export function lineOption(series: SeriesSpec[]): EChartsOption {
     animationEasingUpdate: 'cubicOut',
     tooltip: {
       trigger: 'axis',
-      backgroundColor: '#171a15',
-      borderColor: '#3a4134',
-      textStyle: { color: '#edf2e8', fontSize: 11.5, fontFamily: "'Cascadia Code', Consolas, monospace" },
-      axisPointer: { lineStyle: { color: '#596251' } },
+      backgroundColor: '#fffaf0',
+      borderColor: '#bdae91',
+      textStyle: { color: '#2f2b23', fontSize: 11.5, fontFamily: "'Cascadia Code', Consolas, monospace" },
+      axisPointer: { lineStyle: { color: '#8f856f' } },
       confine: true,
       valueFormatter: undefined,
     },
@@ -52,7 +52,7 @@ export function lineOption(series: SeriesSpec[]): EChartsOption {
       right: 4,
       itemWidth: 12,
       itemHeight: 2,
-      textStyle: { color: '#9aa393', fontSize: 10.5 },
+      textStyle: { color: '#6f6759', fontSize: 10.5 },
     } : undefined,
     grid: { left: 48, right: 14, top: series.length > 1 ? 30 : 14, bottom: 24, containLabel: false },
     xAxis: {
@@ -94,10 +94,10 @@ export function barOption(
     animationDurationUpdate: 260,
     tooltip: {
       trigger: 'axis',
-      backgroundColor: '#171a15',
-      borderColor: '#3a4134',
-      textStyle: { color: '#edf2e8', fontSize: 11.5, fontFamily: "'Cascadia Code', Consolas, monospace" },
-      axisPointer: { type: 'shadow', shadowStyle: { color: 'rgba(215,255,95,0.05)' } },
+      backgroundColor: '#fffaf0',
+      borderColor: '#bdae91',
+      textStyle: { color: '#2f2b23', fontSize: 11.5, fontFamily: "'Cascadia Code', Consolas, monospace" },
+      axisPointer: { type: 'shadow', shadowStyle: { color: 'rgba(105,114,84,0.08)' } },
     },
     grid: { left: 46, right: 14, top: 14, bottom: 22 },
     xAxis: {
@@ -118,7 +118,7 @@ export function barOption(
       itemWidth: 10,
       itemHeight: 10,
       icon: 'roundRect',
-      textStyle: { color: '#9aa393', fontSize: 11 },
+      textStyle: { color: '#6f6759', fontSize: 11 },
     },
     series: series.map((s) => ({
       name: s.name,

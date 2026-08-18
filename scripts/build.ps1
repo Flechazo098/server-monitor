@@ -14,6 +14,9 @@ $tauriCli = Join-Path $frontend 'node_modules\.bin\tauri.cmd'
 $localPrivateKey = Join-Path $root '.local-secrets\server-monitor.key'
 $localPassword = Join-Path $root '.local-secrets\server-monitor.password'
 $updaterPublicKey = Join-Path $tauri 'updater.pubkey'
+$plainConfig = Join-Path $backend 'config.json'
+$protectedConfig = Join-Path $tauri 'resources\config.dpapi'
+$configEntropy = 'cc.sighs.server-monitor/config/v1'
 
 function Invoke-Checked {
   param([string]$Name, [scriptblock]$Action)
@@ -73,6 +76,57 @@ function Assert-BuildTools {
   Assert-Tool rustc
 }
 
+function Stage-EncryptedConfig {
+  $protectedDir = Split-Path $protectedConfig -Parent
+  New-Item -ItemType Directory -Force -Path $protectedDir | Out-Null
+
+  if (-not (Test-Path -LiteralPath $plainConfig)) {
+    if (-not (Test-Path -LiteralPath $protectedConfig)) {
+      throw 'Encrypted configuration resource is missing and backend/config.json is not available'
+    }
+    Write-Host 'Using the committed DPAPI-protected configuration resource.'
+    return
+  }
+
+  $json = [System.IO.File]::ReadAllText($plainConfig, [System.Text.UTF8Encoding]::new($false))
+  try { $null = $json | ConvertFrom-Json } catch { throw 'backend/config.json is not valid JSON' }
+  $plainBytes = [System.Text.Encoding]::UTF8.GetBytes($json)
+  $entropy = [System.Text.Encoding]::UTF8.GetBytes($configEntropy)
+
+  $matchesExisting = $false
+  if (Test-Path -LiteralPath $protectedConfig) {
+    try {
+      $existingCipher = [System.IO.File]::ReadAllBytes($protectedConfig)
+      $existingPlain = [System.Security.Cryptography.ProtectedData]::Unprotect(
+        $existingCipher,
+        $entropy,
+        [System.Security.Cryptography.DataProtectionScope]::CurrentUser
+      )
+      $sha = [System.Security.Cryptography.SHA256]::Create()
+      $plainHash = $sha.ComputeHash($plainBytes)
+      $existingHash = $sha.ComputeHash($existingPlain)
+      $matchesExisting = [Convert]::ToHexString($plainHash) -eq [Convert]::ToHexString($existingHash)
+      $sha.Dispose()
+      [System.Security.Cryptography.CryptographicOperations]::ZeroMemory($existingPlain)
+    } catch {
+      Write-Host 'Existing encrypted resource belongs to another user or is invalid; replacing it locally.' -ForegroundColor Yellow
+    }
+  }
+
+  if (-not $matchesExisting) {
+    $cipher = [System.Security.Cryptography.ProtectedData]::Protect(
+      $plainBytes,
+      $entropy,
+      [System.Security.Cryptography.DataProtectionScope]::CurrentUser
+    )
+    [System.IO.File]::WriteAllBytes($protectedConfig, $cipher)
+    Write-Host "Staged DPAPI-protected configuration: $protectedConfig"
+  } else {
+    Write-Host 'Encrypted configuration already matches the local plaintext input.'
+  }
+  [System.Security.Cryptography.CryptographicOperations]::ZeroMemory($plainBytes)
+}
+
 function Export-Contract {
   Invoke-Checked 'Build Haskell contract exporter' {
     Push-Location $backend
@@ -117,6 +171,7 @@ function Invoke-Tests {
 
 function Invoke-Checks {
   Assert-Version | Out-Null
+  Stage-EncryptedConfig
   Export-Contract
   Invoke-Checked 'Haskell tests' { Push-Location $backend; try { & cabal test all --test-show-details=direct } finally { Pop-Location } }
   Invoke-Checked 'Haskell lint' { Push-Location $backend; try { & hlint src app test } finally { Pop-Location } }
@@ -129,6 +184,7 @@ function Invoke-Checks {
 
 function Invoke-Build {
   Assert-Version | Out-Null
+  Stage-EncryptedConfig
   Export-Contract
   Stage-Backend
   Invoke-Checked 'Frontend production build' { Push-Location $frontend; try { & npm.cmd run build } finally { Pop-Location } }
@@ -137,6 +193,7 @@ function Invoke-Build {
 
 function Invoke-Bundle {
   Assert-Version | Out-Null
+  Stage-EncryptedConfig
   Export-Contract
   Stage-Backend
   if (-not (Test-Path -LiteralPath $tauriCli)) { throw 'Tauri CLI is missing; run npm ci in frontend' }

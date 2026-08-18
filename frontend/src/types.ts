@@ -240,6 +240,50 @@ export const CollectionConfigSchema = z.strictObject({
 })
 export type CollectionConfig = z.infer<typeof CollectionConfigSchema>
 
+export const ServerConfigSchema = z.strictObject({
+  id: z.string().min(1).regex(/^[\p{L}\p{N}._-]+$/u),
+  name: z.string().trim().min(1),
+  sshHost: z.string().min(1).regex(/^[\p{L}\p{N}.:-]+$/u),
+  sshPort: z.number().int().min(1).max(65535),
+  sshUser: z.string().min(1).regex(/^[\p{L}\p{N}._-]+$/u),
+  sshKey: z.string().trim().min(1),
+  intervalSec: z.number().int().min(5).max(3600),
+  publicUrls: z.array(z.string().url().refine((url) => url.startsWith('http://') || url.startsWith('https://'))),
+  certHosts: z.array(z.string().min(1).regex(/^[\p{L}\p{N}.-]+$/u)),
+})
+export type ServerConfig = z.infer<typeof ServerConfigSchema>
+
+export const MonitorConfigSchema = z.strictObject({
+  dbPath: z.string().trim().min(1),
+  alerts: AlertConfigSchema.extend({
+    diskPct: finite.min(1).max(100),
+    memPct: finite.min(1).max(100),
+    cpuPct: finite.min(1).max(100),
+    healthMaxFails: nonNegativeInteger.min(1),
+    backupMaxAgeHours: nonNegativeInteger.min(1),
+  }),
+  collection: CollectionConfigSchema.extend({
+    fullIntervalSec: nonNegativeInteger.min(10).max(86400),
+    timeoutSec: nonNegativeInteger.min(5).max(300),
+    retentionDays: nonNegativeInteger.min(1).max(3650),
+    backoffMaxSec: nonNegativeInteger.min(5).max(3600),
+  }),
+  servers: z.array(ServerConfigSchema).min(1),
+}).superRefine((config, context) => {
+  const ids = new Set<string>()
+  config.servers.forEach((server, index) => {
+    if (ids.has(server.id)) {
+      context.addIssue({
+        code: 'custom',
+        path: ['servers', index, 'id'],
+        message: 'Server IDs must be unique',
+      })
+    }
+    ids.add(server.id)
+  })
+})
+export type MonitorConfig = z.infer<typeof MonitorConfigSchema>
+
 export const ServerStateSchema = z.strictObject({
   id: z.string(),
   name: z.string(),
@@ -301,6 +345,7 @@ export const WsMessageSchema = z.discriminatedUnion('type', [
 export type WsMessage = z.infer<typeof WsMessageSchema>
 
 export const ContractBundleSchema = z.strictObject({
+  config: MonitorConfigSchema,
   health: HealthInfoSchema,
   servers: z.array(ServerStateSchema),
   containers: z.array(ContainerSchema),

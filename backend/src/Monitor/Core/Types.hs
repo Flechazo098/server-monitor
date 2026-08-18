@@ -53,14 +53,15 @@ module Monitor.Core.Types
 import Control.Concurrent.STM (TChan, TVar)
 import Data.Aeson
   ( FromJSON (..)
+  , Object
   , ToJSON (..)
   , object
   , withObject
   , (.:)
-  , (.:?)
-  , (.!=)
   , (.=)
   )
+import qualified Data.Aeson.Key as Key
+import qualified Data.Aeson.KeyMap as KeyMap
 import Data.Aeson.Types (Parser)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
@@ -69,6 +70,12 @@ import qualified Data.Text as T
 import Data.Time (UTCTime)
 import Data.Time.Clock.POSIX (posixSecondsToUTCTime)
 import GHC.Generics (Generic)
+
+ensureOnlyKeys :: Object -> [Text] -> Parser ()
+ensureOnlyKeys value allowed =
+  case filter (`notElem` allowed) (map (Key.toText . fst) (KeyMap.toList value)) of
+    [] -> pure ()
+    extras -> fail ("unknown field(s): " <> show extras)
 
 -- | Identifier of a monitored server.
 newtype ServerId = ServerId Text
@@ -95,16 +102,20 @@ data ServerConfig = ServerConfig
   deriving (Show, Generic)
 
 instance FromJSON ServerConfig where
-  parseJSON = withObject "ServerConfig" $ \o ->
+  parseJSON = withObject "ServerConfig" $ \o -> do
+    ensureOnlyKeys o
+      [ "id", "name", "sshHost", "sshPort", "sshUser", "sshKey"
+      , "intervalSec", "publicUrls", "certHosts"
+      ]
     ServerConfig . ServerId <$> o .: "id"
       <*> o .: "name"
       <*> o .: "sshHost"
-      <*> o .:? "sshPort" .!= 22
+      <*> o .: "sshPort"
       <*> o .: "sshUser"
       <*> o .: "sshKey"
-      <*> o .:? "intervalSec" .!= 20
-      <*> o .:? "publicUrls" .!= []
-      <*> o .:? "certHosts" .!= []
+      <*> o .: "intervalSec"
+      <*> o .: "publicUrls"
+      <*> o .: "certHosts"
 
 instance ToJSON ServerConfig where
   toJSON sc = object
@@ -113,6 +124,7 @@ instance ToJSON ServerConfig where
     , "sshHost"    .= scSshHost sc
     , "sshPort"    .= scSshPort sc
     , "sshUser"    .= scSshUser sc
+    , "sshKey"     .= scSshKey sc
     , "intervalSec" .= scIntervalSec sc
     , "publicUrls" .= scPublicUrls sc
     , "certHosts"  .= scCertHosts sc
@@ -630,16 +642,20 @@ defaultAlertConfig = AlertConfig
   }
 
 instance FromJSON AlertConfig where
-  parseJSON = withObject "AlertConfig" $ \o ->
+  parseJSON = withObject "AlertConfig" $ \o -> do
+    ensureOnlyKeys o
+      [ "diskPct", "memPct", "cpuPct", "cpuSustainSec", "tlsMinDays"
+      , "healthMaxFails", "backupMaxAgeHours", "cooldownSec"
+      ]
     AlertConfig
-      <$> o .:? "diskPct" .!= acDiskPct defaultAlertConfig
-      <*> o .:? "memPct" .!= acMemPct defaultAlertConfig
-      <*> o .:? "cpuPct" .!= acCpuPct defaultAlertConfig
-      <*> o .:? "cpuSustainSec" .!= acCpuSustainSec defaultAlertConfig
-      <*> o .:? "tlsMinDays" .!= acTlsMinDays defaultAlertConfig
-      <*> o .:? "healthMaxFails" .!= acHealthMaxFails defaultAlertConfig
-      <*> o .:? "backupMaxAgeHours" .!= acBackupMaxAgeHours defaultAlertConfig
-      <*> o .:? "cooldownSec" .!= acCooldownSec defaultAlertConfig
+      <$> o .: "diskPct"
+      <*> o .: "memPct"
+      <*> o .: "cpuPct"
+      <*> o .: "cpuSustainSec"
+      <*> o .: "tlsMinDays"
+      <*> o .: "healthMaxFails"
+      <*> o .: "backupMaxAgeHours"
+      <*> o .: "cooldownSec"
 
 instance ToJSON AlertConfig where
   toJSON a = object
@@ -671,12 +687,13 @@ defaultCollectionConfig = CollectionConfig
   }
 
 instance FromJSON CollectionConfig where
-  parseJSON = withObject "CollectionConfig" $ \o ->
+  parseJSON = withObject "CollectionConfig" $ \o -> do
+    ensureOnlyKeys o ["fullIntervalSec", "timeoutSec", "retentionDays", "backoffMaxSec"]
     CollectionConfig
-      <$> o .:? "fullIntervalSec" .!= ccFullIntervalSec defaultCollectionConfig
-      <*> o .:? "timeoutSec" .!= ccTimeoutSec defaultCollectionConfig
-      <*> o .:? "retentionDays" .!= ccRetentionDays defaultCollectionConfig
-      <*> o .:? "backoffMaxSec" .!= ccBackoffMaxSec defaultCollectionConfig
+      <$> o .: "fullIntervalSec"
+      <*> o .: "timeoutSec"
+      <*> o .: "retentionDays"
+      <*> o .: "backoffMaxSec"
 
 instance ToJSON CollectionConfig where
   toJSON c = object
@@ -847,17 +864,24 @@ instance ToJSON AlertEntry where
 data MonitorConfig = MonitorConfig
   { cfgServers    :: [ServerConfig]
   , cfgDbPath     :: FilePath
-  , cfgToken      :: Maybe Text
   , cfgAlerts     :: AlertConfig
   , cfgCollection :: CollectionConfig
   }
   deriving (Show, Generic)
 
 instance FromJSON MonitorConfig where
-  parseJSON = withObject "MonitorConfig" $ \o ->
+  parseJSON = withObject "MonitorConfig" $ \o -> do
+    ensureOnlyKeys o ["servers", "dbPath", "alerts", "collection"]
     MonitorConfig
       <$> o .: "servers"
-      <*> o .:? "dbPath" .!= "monitor.db"
-      <*> o .:? "token"
-      <*> o .:? "alerts" .!= defaultAlertConfig
-      <*> o .:? "collection" .!= defaultCollectionConfig
+      <*> o .: "dbPath"
+      <*> o .: "alerts"
+      <*> o .: "collection"
+
+instance ToJSON MonitorConfig where
+  toJSON config = object
+    [ "servers" .= cfgServers config
+    , "dbPath" .= cfgDbPath config
+    , "alerts" .= cfgAlerts config
+    , "collection" .= cfgCollection config
+    ]

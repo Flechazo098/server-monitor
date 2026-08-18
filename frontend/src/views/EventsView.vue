@@ -7,8 +7,10 @@ import StatusChip from '../components/StatusChip.vue'
 import Panel from '../components/Panel.vue'
 import EmptyState from '../components/EmptyState.vue'
 import { EventRowSchema, type EventRow, type Severity } from '../types'
+import { useUiText } from '../i18n'
 
 const store = useServersStore()
+const tr = useUiText()
 const rows = ref<EventRow[]>([])
 const error = ref<string | null>(null)
 const loading = ref(false)
@@ -63,7 +65,7 @@ function chipKind(e: EventRow): 'ok' | 'warn' | 'crit' | 'info' {
 }
 
 function severityLabel(severity: Severity): string {
-  return severity === 'critical' ? 'Critical' : severity === 'warning' ? 'Warning' : 'Info'
+  return tr(severity === 'critical' ? 'Critical' : severity === 'warning' ? 'Warning' : 'Info')
 }
 
 onMounted(() => {
@@ -77,43 +79,43 @@ onBeforeUnmount(() => window.clearInterval(timer))
   <div>
     <div class="page-head">
       <div>
-        <h1 class="page-title">Events</h1>
-        <p class="page-sub">{{ filtered.filter((event) => event.state === 'fired').length }} active transitions in current view</p>
+        <h1 class="page-title">{{ tr('Events') }}</h1>
+        <p class="page-sub">{{ filtered.filter((event) => event.state === 'fired').length }} {{ tr('active transitions in current view') }}</p>
       </div>
-      <div class="page-side">{{ filtered.length }} events shown</div>
+      <div class="page-side">{{ filtered.length }} {{ tr('events shown') }}</div>
     </div>
 
     <div v-if="error" class="error-box">{{ error }}</div>
 
     <div class="filter-bar">
       <select v-model="serverFilter">
-        <option value="all">All servers</option>
+        <option value="all">{{ tr('All servers') }}</option>
         <option v-for="s in store.servers" :key="s.id" :value="s.id">{{ s.name }}</option>
       </select>
       <select v-model="typeFilter">
-        <option value="all">All types</option>
-        <option value="alert">Alerts</option>
-        <option value="status">Status</option>
+        <option value="all">{{ tr('All types') }}</option>
+        <option value="alert">{{ tr('Alerts') }}</option>
+        <option value="status">{{ tr('Status') }}</option>
       </select>
       <select v-model="severityFilter">
-        <option value="all">All severities</option>
-        <option value="critical">Critical</option>
-        <option value="warning">Warning</option>
-        <option value="info">Info</option>
+        <option value="all">{{ tr('All severities') }}</option>
+        <option value="critical">{{ tr('Critical') }}</option>
+        <option value="warning">{{ tr('Warning') }}</option>
+        <option value="info">{{ tr('Info') }}</option>
       </select>
-      <button class="btn" @click="load"><UiIcon name="refresh" :size="13" /> Refresh</button>
+      <button class="btn" @click="load"><UiIcon name="refresh" :size="13" /> {{ tr('Refresh') }}</button>
     </div>
 
     <Panel title="Event log" flush>
       <table class="tbl">
         <thead>
           <tr>
-            <th style="width: 170px">Time</th>
-            <th>Server</th>
-            <th>Type</th>
-            <th>Severity</th>
-            <th>State</th>
-            <th>Message</th>
+            <th style="width: 170px">{{ tr('Time') }}</th>
+            <th>{{ tr('Server') }}</th>
+            <th>{{ tr('Type') }}</th>
+            <th>{{ tr('Severity') }}</th>
+            <th>{{ tr('State') }}</th>
+            <th>{{ tr('Message') }}</th>
           </tr>
         </thead>
         <tbody>
@@ -122,12 +124,12 @@ onBeforeUnmount(() => window.clearInterval(timer))
             <td class="mono">{{ e.server }}</td>
             <td class="mono">{{ e.type }}</td>
             <td><StatusChip :kind="chipKind(e)" :label="severityLabel(e.severity)" /></td>
-            <td><span class="event-state" :class="e.state === 'resolved' ? 'resolved' : e.state === 'fired' ? 'fired' : ''">{{ e.state === 'resolved' ? 'Recovered' : e.state === 'fired' ? 'Active' : '—' }}</span></td>
+            <td><span class="event-state" :class="e.state === 'resolved' ? 'resolved' : e.state === 'fired' ? 'fired' : ''">{{ e.state === 'resolved' ? tr('Recovered') : e.state === 'fired' ? tr('Active') : '—' }}</span></td>
             <td class="event-message">{{ e.message }}</td>
           </tr>
         </tbody>
       </table>
-      <div v-if="loading" class="loading"><span class="spinner" /> refreshing…</div>
+      <div v-if="loading" class="loading"><span class="spinner" /> {{ tr('refreshing…') }}</div>
       <EmptyState v-if="!loading && filtered.length === 0" icon="bell" message="No events match the filters" />
     </Panel>
   </div>

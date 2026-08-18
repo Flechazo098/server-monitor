@@ -1,9 +1,12 @@
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 
 module Main (main) where
 
 import Control.Exception (finally)
 import Control.Monad (forM_, unless, when)
+import qualified Data.Aeson as Aeson
+import qualified Data.Aeson.KeyMap as KeyMap
 import qualified Data.Map.Strict as Map
 import Data.Maybe (fromJust)
 import Data.Text (Text)
@@ -11,6 +14,7 @@ import qualified Data.Text as T
 import Data.Time (UTCTime)
 import Monitor.Collector.Parse
 import Monitor.Collector.SSH (fullScript, metricsScript)
+import Monitor.Config (resolveConfigPaths, validateConfig)
 import Monitor.Core.Types
 import Monitor.Storage.SQLite
 import System.Directory (doesFileExist, getTemporaryDirectory, removeFile)
@@ -22,6 +26,7 @@ main = do
   testGeneratedScripts
   testBatchParser
   testSectionFailure
+  testConfigContract
   testStorage
   putStrLn "monitor-tests: ok"
 
@@ -49,6 +54,25 @@ server = ServerConfig
   , scPublicUrls = ["https://example.com/health"]
   , scCertHosts = ["example.com"]
   }
+
+testConfigContract :: IO ()
+testConfigContract = do
+  let config = MonitorConfig [server] "data/monitor.db" defaultAlertConfig defaultCollectionConfig
+  assert "valid config accepted" (validateConfig config == Right ())
+  case Aeson.fromJSON (Aeson.toJSON config) of
+    Aeson.Success decoded -> do
+      assert "config round trip retains sshKey" (map scSshKey (cfgServers decoded) == ["unused"])
+      let resolved = resolveConfigPaths "C:/app-data" decoded
+      assert "relative config paths use protected config base"
+        (cfgDbPath resolved == "C:\\app-data\\data\\monitor.db"
+          && map scSshKey (cfgServers resolved) == ["C:\\app-data\\unused"])
+    Aeson.Error _ -> assert "config round trip decodes" False
+  case Aeson.toJSON config of
+    Aeson.Object fields ->
+      case Aeson.fromJSON (Aeson.Object (KeyMap.insert "renamedField" Aeson.Null fields)) of
+        Aeson.Error _ -> pure ()
+        Aeson.Success (_ :: MonitorConfig) -> assert "unknown config field rejected" False
+    _ -> assert "config encodes as object" False
 
 sampleTime :: UTCTime
 sampleTime = read "2026-08-17 00:00:00 UTC"

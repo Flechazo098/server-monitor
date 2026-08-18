@@ -30,7 +30,8 @@ main = do
 
 contractBundle :: Value
 contractBundle = object
-  [ "health" .= HealthInfo "ok" 2 1 defaultAlertConfig defaultCollectionConfig
+  [ "config" .= sampleConfig
+  , "health" .= HealthInfo "ok" 2 1 defaultAlertConfig defaultCollectionConfig
   , "servers" .= [fullState, offlineState]
   , "containers" .= ssContainers fullState
   , "services" .= ssServices fullState
@@ -68,6 +69,14 @@ serverConfig = ServerConfig
   , scIntervalSec = 20
   , scPublicUrls = ["https://example.invalid/health"]
   , scCertHosts = ["example.invalid"]
+  }
+
+sampleConfig :: MonitorConfig
+sampleConfig = MonitorConfig
+  { cfgServers = [serverConfig]
+  , cfgDbPath = "monitor.db"
+  , cfgAlerts = defaultAlertConfig
+  , cfgCollection = defaultCollectionConfig
   }
 
 sampleMetrics :: Metrics

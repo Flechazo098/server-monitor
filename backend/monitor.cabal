@@ -9,6 +9,7 @@ library
   hs-source-dirs:   src
   exposed-modules:
       Monitor.Core.Types
+      Monitor.Config
       Monitor.Collector.SSH
       Monitor.Collector.Parse
       Monitor.Storage.SQLite
@@ -21,6 +22,7 @@ library
     , bytestring   >=0.11
     , containers   >=0.6
     , directory    >=1.3
+    , filepath     >=1.4
     , network      >=3.1
     , process      >=1.6
     , servant      >=0.20
@@ -83,6 +85,7 @@ test-suite monitor-tests
   build-depends:
       base
     , monitor-backend
+    , aeson
     , containers
     , directory
     , filepath

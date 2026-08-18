@@ -9,8 +9,10 @@ import MeterBar from '../components/MeterBar.vue'
 import StatusChip from '../components/StatusChip.vue'
 import Panel from '../components/Panel.vue'
 import EmptyState from '../components/EmptyState.vue'
+import { useUiText } from '../i18n'
 
 const store = useServersStore()
+const tr = useUiText()
 const thresholds = computed(() => store.healthInfo?.alerts)
 
 const online = computed(() => store.servers.filter((s) => s.status === 'online').length)
@@ -75,41 +77,41 @@ const soonestCert = computed(() => [...tlsRows.value].sort((a, b) => a.c.daysLef
   <div>
     <div class="page-head">
       <div>
-        <h1 class="page-title">Overview</h1>
-        <p class="page-sub">{{ healthy }}/{{ store.servers.length }} healthy · {{ online }} reachable · {{ alertCount }} active alerts</p>
+        <h1 class="page-title">{{ tr('Overview') }}</h1>
+        <p class="page-sub">{{ healthy }}/{{ store.servers.length }} {{ tr('healthy') }} · {{ online }} {{ tr('reachable') }} · {{ alertCount }} {{ tr('active alerts') }}</p>
       </div>
       <div class="page-side">
-        <span v-if="latestUpdate">updated {{ fmtClock(latestUpdate) }}</span>
+        <span v-if="latestUpdate">{{ tr('updated') }} {{ fmtClock(latestUpdate) }}</span>
       </div>
     </div>
 
     <div class="stat-strip">
       <div class="stat">
-        <div class="stat-label">Servers</div>
-        <div class="stat-value">{{ store.servers.length }}<small>online {{ online }}</small></div>
+        <div class="stat-label">{{ tr('Servers') }}</div>
+        <div class="stat-value">{{ store.servers.length }}<small>{{ tr('online') }} {{ online }}</small></div>
       </div>
       <div class="stat">
-        <div class="stat-label">Active alerts</div>
+        <div class="stat-label">{{ tr('Active alerts') }}</div>
         <div class="stat-value" :class="critCount > 0 ? 'crit-text' : alertCount > 0 ? 'warn-text' : 'ok-text'">
           {{ alertCount }}
         </div>
       </div>
       <div class="stat">
-        <div class="stat-label">Avg CPU</div>
+        <div class="stat-label">{{ tr('Avg CPU') }}</div>
         <div class="stat-value">{{ fmtPct(avgCpu) }}</div>
       </div>
       <div class="stat">
-        <div class="stat-label">Avg MEM</div>
+        <div class="stat-label">{{ tr('Avg MEM') }}</div>
         <div class="stat-value">{{ fmtPct(avgMem) }}</div>
       </div>
       <div class="stat">
-        <div class="stat-label">Traffic today</div>
+        <div class="stat-label">{{ tr('Traffic today') }}</div>
         <div class="stat-value">{{ fmtBytes(trafficToday) }}</div>
       </div>
       <div class="stat">
-        <div class="stat-label">Cert expiring soonest</div>
+        <div class="stat-label">{{ tr('Cert expiring soonest') }}</div>
         <div class="stat-value" v-if="soonestCert">
-          {{ soonestCert.c.daysLeft }}<small>days · {{ soonestCert.c.host }}</small>
+          {{ soonestCert.c.daysLeft }}<small>{{ tr('days') }} · {{ soonestCert.c.host }}</small>
         </div>
         <div class="stat-value faint" v-else>—</div>
       </div>
@@ -119,15 +121,15 @@ const soonestCert = computed(() => [...tlsRows.value].sort((a, b) => a.c.daysLef
       <table class="tbl">
         <thead>
           <tr>
-            <th>Server</th>
-            <th>Status</th>
+            <th>{{ tr('Server') }}</th>
+            <th>{{ tr('Status') }}</th>
             <th>CPU</th>
-            <th>MEM</th>
+            <th>{{ tr('MEM') }}</th>
             <th>DISK /</th>
-            <th>Load 1m</th>
-            <th class="num">NET (rx / tx)</th>
-            <th class="num">Uptime</th>
-            <th class="num">Updated</th>
+            <th>{{ tr('Load 1m') }}</th>
+            <th class="num">{{ tr('NET (rx / tx)') }}</th>
+            <th class="num">{{ tr('Uptime') }}</th>
+            <th class="num">{{ tr('Updated') }}</th>
           </tr>
         </thead>
         <tbody>
@@ -163,12 +165,12 @@ const soonestCert = computed(() => [...tlsRows.value].sort((a, b) => a.c.daysLef
               <td class="num faint">{{ fmtClock(s.updatedAt) }}</td>
             </template>
             <template v-else>
-              <td colspan="6" class="faint">no metrics yet</td>
+              <td colspan="6" class="faint">{{ tr('no metrics yet') }}</td>
             </template>
           </tr>
         </tbody>
       </table>
-      <EmptyState v-if="store.servers.length === 0" icon="server" message="No servers — check backend config.json" />
+      <EmptyState v-if="store.servers.length === 0" icon="server" message="No servers — check protected configuration" />
     </Panel>
 
     <div class="grid-2-1" style="margin-top: 12px">
@@ -182,7 +184,7 @@ const soonestCert = computed(() => [...tlsRows.value].sort((a, b) => a.c.daysLef
           height="240px"
         />
         <div class="panel-side" style="margin-top: 6px">
-          <span class="faint">total 14d</span>
+          <span class="faint">{{ tr('total') }} 14d</span>
           <span class="mono">↓ {{ fmtBytes(vnstatRx.reduce((a, b) => a + b, 0)) }}</span>
           <span class="mono">↑ {{ fmtBytes(vnstatTx.reduce((a, b) => a + b, 0)) }}</span>
         </div>

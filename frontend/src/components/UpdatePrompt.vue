@@ -2,6 +2,9 @@
 import { computed, onMounted, shallowRef, ref } from 'vue'
 import { check, type Update } from '@tauri-apps/plugin-updater'
 import { relaunch } from '@tauri-apps/plugin-process'
+import { useI18n } from 'vue-i18n'
+
+const { t } = useI18n()
 
 const update = shallowRef<Update | null>(null)
 const dismissed = ref(false)
@@ -38,7 +41,7 @@ async function install() {
     })
     await relaunch()
   } catch (reason) {
-    error.value = reason instanceof Error ? reason.message : 'Update installation failed'
+    error.value = reason instanceof Error ? reason.message : t('app.updateFailed')
     installing.value = false
   }
 }
@@ -51,17 +54,17 @@ onMounted(() => window.setTimeout(checkForUpdate, 2500))
     <div class="update-mark"><UiIcon name="download" :size="17" /></div>
     <div class="update-copy">
       <div class="update-title">Server Monitor {{ update?.version }}</div>
-      <div class="update-meta">Signed update available</div>
+      <div class="update-meta">{{ t('app.updateAvailable') }}</div>
       <div v-if="installing" class="update-progress">
         <span :style="{ width: (progress ?? 8) + '%' }" />
       </div>
       <div v-if="error" class="update-error">{{ error }}</div>
     </div>
     <div class="update-actions">
-      <button class="btn" :disabled="installing" @click="dismissed = true">Later</button>
+      <button class="btn" :disabled="installing" @click="dismissed = true">{{ t('app.later') }}</button>
       <button class="btn primary" :disabled="installing" @click="install">
         <UiIcon name="download" :size="14" />
-        {{ installing ? (progress === null ? 'Downloading' : progress + '%') : 'Update' }}
+        {{ installing ? (progress === null ? t('app.downloading') : progress + '%') : t('app.update') }}
       </button>
     </div>
   </section>

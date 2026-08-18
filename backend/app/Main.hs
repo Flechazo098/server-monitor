@@ -9,21 +9,23 @@
 module Main (main) where
 
 import Control.Concurrent.STM (newTChanIO, newTVarIO)
+import Control.Applicative ((<|>))
 import Control.Exception (SomeException, displayException, try)
 import Control.Monad (unless)
-import Data.Aeson (eitherDecodeFileStrict)
-import Data.Char (isAlphaNum, isSpace)
-import qualified Data.Set as Set
+import Data.Aeson (eitherDecodeFileStrict, eitherDecodeStrict')
+import Data.Char (isSpace)
 import Data.Text (Text)
 import qualified Data.Text as T
+import qualified Data.Text.Encoding as T
 import Monitor.Api.Server (runBackend)
+import Monitor.Config (resolveConfigPaths, validateConfig)
 import Monitor.Core.Types
 import Monitor.Runtime.Worker (startWorkers)
 import Monitor.Storage.SQLite (initDb)
-import System.Directory (doesFileExist)
-import System.Environment (getArgs, getExecutablePath)
+import System.Directory (doesFileExist, getCurrentDirectory)
+import System.Environment (getArgs, getExecutablePath, lookupEnv)
 import System.Exit (die)
-import System.FilePath (isRelative, normalise, takeDirectory, (</>))
+import System.FilePath (takeDirectory, (</>))
 import System.IO (hPutStrLn, stderr)
 
 -- | Parsed command-line options.
@@ -60,30 +62,14 @@ main :: IO ()
 main = do
   args <- getArgs
   cli <- either (die . (<> "\nusage: monitor-backend [--token <t>] [--config <path>]")) pure (parseArgs args)
-  cfgPath <- resolveConfigPath (cliConfig cli)
-  hPutStrLn stderr ("monitor-backend: config " <> cfgPath)
-  cfgResult <- try (eitherDecodeFileStrict cfgPath)
-    :: IO (Either SomeException (Either String MonitorConfig))
-  cfg <- case cfgResult of
-    Left ex ->
-      die
-        ( "cannot load " <> cfgPath <> ": " <> displayException ex
-          <> "\nusage: monitor-backend [--token <t>] [--config <path>]"
-        )
-    Right (Left err) -> die ("invalid config " <> cfgPath <> ": " <> err)
-    Right (Right c) -> pure c
-  either (\err -> die ("invalid config " <> cfgPath <> ": " <> err)) pure (validateConfig cfg)
-  let db = cfgDbPath cfg
-      resolvedDb = normalise (if isRelative db then takeDirectory cfgPath </> db else db)
-      resolvedCfg = cfg { cfgDbPath = resolvedDb }
+  (cfg, configBase, protectedSource) <- loadConfig cli
+  either (die . ("invalid config: " <>)) pure (validateConfig cfg)
+  let resolvedCfg = resolveConfigPaths configBase cfg
   keysExist <- mapM (doesFileExist . scSshKey) (cfgServers resolvedCfg)
   unless (and keysExist) (die "invalid config: one or more SSH key files do not exist")
   initDb (cfgDbPath resolvedCfg)
-  token <-
-    maybe
-      (maybe (die "authentication token required: pass --token or configure token") pure (cfgToken resolvedCfg))
-      pure
-      (cliToken cli)
+  environmentToken <- fmap T.pack <$> lookupEnv "SERVER_MONITOR_AUTH_TOKEN"
+  token <- maybe (die "authentication token required") pure (cliToken cli <|> environmentToken)
   unless (T.length token >= 24 && T.all (not . isSpace) token) $
     die "authentication token must contain at least 24 non-whitespace characters"
   state <- AppState
@@ -96,59 +82,29 @@ main = do
   startWorkers state resolvedCfg
   hPutStrLn stderr
     ( "monitor-backend: monitoring " <> show (length (cfgServers resolvedCfg))
-      <> " server(s), db=" <> cfgDbPath resolvedCfg
+      <> " server(s); configuration=" <> if protectedSource then "protected" else "file"
     )
   runBackend state token
 
-validateConfig :: MonitorConfig -> Either String ()
-validateConfig cfg = do
-  require (not (null servers)) "servers must not be empty"
-  require (length ids == Set.size (Set.fromList ids)) "server ids must be unique"
-  mapM_ validateServer servers
-  require (between 1 100 (acDiskPct alerts)) "alerts.diskPct must be between 1 and 100"
-  require (between 1 100 (acMemPct alerts)) "alerts.memPct must be between 1 and 100"
-  require (between 1 100 (acCpuPct alerts)) "alerts.cpuPct must be between 1 and 100"
-  require (acCpuSustainSec alerts >= 0) "alerts.cpuSustainSec must be non-negative"
-  require (acTlsMinDays alerts >= 0) "alerts.tlsMinDays must be non-negative"
-  require (acHealthMaxFails alerts >= 1) "alerts.healthMaxFails must be at least 1"
-  require (acBackupMaxAgeHours alerts >= 1) "alerts.backupMaxAgeHours must be at least 1"
-  require (acCooldownSec alerts >= 0) "alerts.cooldownSec must be non-negative"
-  require (betweenInt 10 86400 (ccFullIntervalSec collection)) "collection.fullIntervalSec must be between 10 and 86400"
-  require (betweenInt 5 300 (ccTimeoutSec collection)) "collection.timeoutSec must be between 5 and 300"
-  require (betweenInt 1 3650 (ccRetentionDays collection)) "collection.retentionDays must be between 1 and 3650"
-  require (betweenInt 5 3600 (ccBackoffMaxSec collection)) "collection.backoffMaxSec must be between 5 and 3600"
-  where
-    servers = cfgServers cfg
-    alerts = cfgAlerts cfg
-    collection = cfgCollection cfg
-    ids = [sid | ServerId sid <- map scId servers]
-
-    require True _ = Right ()
-    require False msg = Left msg
-    between lo hi value = value >= lo && value <= hi
-    betweenInt lo hi value = value >= lo && value <= hi
-
-    validateServer server = do
-      let ServerId sid = scId server
-      require (validId sid) "server id must contain only letters, digits, '.', '_' or '-'"
-      require (not (T.null (T.strip (scName server)))) "server name must not be empty"
-      require (validSshHost (scSshHost server)) "sshHost contains invalid characters"
-      require (validSshUser (scSshUser server)) "sshUser contains invalid characters"
-      require (betweenInt 1 65535 (scSshPort server)) "sshPort must be between 1 and 65535"
-      require (betweenInt 5 3600 (scIntervalSec server)) "intervalSec must be between 5 and 3600"
-      require (all validUrl (scPublicUrls server)) "publicUrls must use http:// or https:// and contain no whitespace"
-      require (all validHost (certHostsOf server)) "certHosts must be plain DNS names"
-
-    validId value = not (T.null value) && T.all (\c -> isAlphaNum c || c `elem` ("._-" :: String)) value
-    validUrl value =
-      ("https://" `T.isPrefixOf` value || "http://" `T.isPrefixOf` value)
-        && not (T.any isSpace value)
-    validHost value =
-      not (T.null value)
-        && T.all (\c -> isAlphaNum c || c `elem` (".-" :: String)) value
-    validSshHost value =
-      not (T.null value)
-        && T.all (\c -> isAlphaNum c || c `elem` (".:-" :: String)) value
-    validSshUser value =
-      not (T.null value)
-        && T.all (\c -> isAlphaNum c || c `elem` ("._-" :: String)) value
+loadConfig :: Cli -> IO (MonitorConfig, FilePath, Bool)
+loadConfig cli = do
+  environmentJson <- lookupEnv "SERVER_MONITOR_CONFIG_JSON"
+  case environmentJson of
+    Just raw -> do
+      base <- lookupEnv "SERVER_MONITOR_CONFIG_DIR" >>= maybe getCurrentDirectory pure
+      config <- either (die . ("invalid protected configuration: " <>)) pure
+        (eitherDecodeStrict' (T.encodeUtf8 (T.pack raw)))
+      pure (config, base, True)
+    Nothing -> do
+      configPath <- resolveConfigPath (cliConfig cli)
+      configResult <- try (eitherDecodeFileStrict configPath)
+        :: IO (Either SomeException (Either String MonitorConfig))
+      config <- case configResult of
+        Left exception ->
+          die
+            ( "cannot load configuration: " <> displayException exception
+              <> "\nusage: monitor-backend [--token <t>] [--config <path>]"
+            )
+        Right (Left errorMessage) -> die ("invalid configuration: " <> errorMessage)
+        Right (Right decoded) -> pure decoded
+      pure (config, takeDirectory configPath, False)

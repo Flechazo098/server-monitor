@@ -26,9 +26,11 @@ import MeterBar from '../components/MeterBar.vue'
 import StatusChip from '../components/StatusChip.vue'
 import Panel from '../components/Panel.vue'
 import EmptyState from '../components/EmptyState.vue'
+import { useUiText } from '../i18n'
 
 const route = useRoute()
 const store = useServersStore()
+const tr = useUiText()
 const thresholds = computed(() => store.healthInfo?.alerts)
 const tab = ref('overview')
 
@@ -159,21 +161,21 @@ const swapPct = computed(() => {
       <div>
         <h1 class="page-title">
           <RouterLink to="/servers" class="dim"><UiIcon name="back" :size="15" /></RouterLink>
-          {{ server?.name ?? 'Server' }}
+          {{ server?.name ?? tr('Server') }}
           <StatusChip v-if="server" :kind="healthState(server.status, server.alerts).kind" :label="healthState(server.status, server.alerts).label" dot style="vertical-align: 2px; margin-left: 8px" />
         </h1>
         <p class="page-sub">
-          <span v-if="server">last collection {{ fmtClock(server.updatedAt) }} · {{ Object.keys(server.sectionErrors).length }} failed section(s)</span>
-          <span v-else>loading…</span>
+          <span v-if="server">{{ tr('last collection') }} {{ fmtClock(server.updatedAt) }} · {{ Object.keys(server.sectionErrors).length }} {{ tr('failed section(s)') }}</span>
+          <span v-else>{{ tr('loading…') }}</span>
         </p>
       </div>
       <div class="page-side" v-if="metrics">
-        <div class="mono">load {{ loadRow }}</div>
+        <div class="mono">{{ tr('Load') }} {{ loadRow }}</div>
         <div class="mono">↓ {{ fmtRate(metrics.rxRate) }} · ↑ {{ fmtRate(metrics.txRate) }}</div>
       </div>
     </div>
 
-    <div v-if="server?.lastError" class="error-box">Last collection error: {{ server.lastError }}</div>
+    <div v-if="server?.lastError" class="error-box">{{ tr('Last collection error') }}: {{ server.lastError }}</div>
 
     <template v-if="server">
       <div class="tabbar">
@@ -185,27 +187,27 @@ const swapPct = computed(() => {
           { id: 'business', label: 'Business' },
           { id: 'backups', label: 'Logs & Backups' },
         ]" :key="t.id" :class="{ active: tab === t.id }" @click="tab = t.id">
-          {{ t.label }}
+          {{ tr(t.label) }}
         </button>
       </div>
 
       <!-- ============ OVERVIEW ============ -->
       <div v-if="tab === 'overview'" class="stack">
         <div v-if="metrics" class="resource-strip">
-          <div><span>CPU total</span><strong>{{ fmtPct(metrics.cpu) }}</strong></div>
-          <div><span>User / system / IO</span><strong>{{ fmtPct(metrics.cpuUser) }} / {{ fmtPct(metrics.cpuSystem) }} / {{ fmtPct(metrics.cpuIowait) }}</strong></div>
-          <div><span>Memory used</span><strong>{{ fmtPct(metrics.mem) }}</strong></div>
-          <div><span>Available / cache</span><strong>{{ fmtBytes(metrics.memAvailableBytes) }} / {{ fmtBytes(metrics.memCacheBytes) }}</strong></div>
-          <div><span>Buffers</span><strong>{{ fmtBytes(metrics.memBuffersBytes) }}</strong></div>
-          <div><span>Swap</span><strong :class="swapPct > 50 ? 'warn-text' : ''">{{ fmtBytes(metrics.swapUsedBytes) }} / {{ fmtBytes(metrics.swapTotalBytes) }}</strong></div>
+          <div><span>{{ tr('CPU total') }}</span><strong>{{ fmtPct(metrics.cpu) }}</strong></div>
+          <div><span>{{ tr('User / system / IO') }}</span><strong>{{ fmtPct(metrics.cpuUser) }} / {{ fmtPct(metrics.cpuSystem) }} / {{ fmtPct(metrics.cpuIowait) }}</strong></div>
+          <div><span>{{ tr('Memory used') }}</span><strong>{{ fmtPct(metrics.mem) }}</strong></div>
+          <div><span>{{ tr('Available / cache') }}</span><strong>{{ fmtBytes(metrics.memAvailableBytes) }} / {{ fmtBytes(metrics.memCacheBytes) }}</strong></div>
+          <div><span>{{ tr('Buffers') }}</span><strong>{{ fmtBytes(metrics.memBuffersBytes) }}</strong></div>
+          <div><span>{{ tr('Swap') }}</span><strong :class="swapPct > 50 ? 'warn-text' : ''">{{ fmtBytes(metrics.swapUsedBytes) }} / {{ fmtBytes(metrics.swapTotalBytes) }}</strong></div>
         </div>
         <div class="grid-2-1">
           <Panel title="CPU composition · live">
             <LineChart
               :series="[
-                { name: 'total', data: cpuHist, color: CHART.cpu, area: true, unit: '%' },
-                { name: 'user', data: cpuUserHist, color: CHART.cpuUser, unit: '%' },
-                { name: 'system', data: cpuSystemHist, color: CHART.cpuSystem, unit: '%' },
+                { name: tr('total'), data: cpuHist, color: CHART.cpu, area: true, unit: '%' },
+                { name: tr('user'), data: cpuUserHist, color: CHART.cpuUser, unit: '%' },
+                { name: tr('system'), data: cpuSystemHist, color: CHART.cpuSystem, unit: '%' },
                 { name: 'iowait', data: cpuIowaitHist, color: CHART.cpuIowait, unit: '%' },
               ]"
               height="220px"
@@ -229,7 +231,7 @@ const swapPct = computed(() => {
             <template v-if="server.ports.length">
               <table class="tbl">
                 <thead>
-                  <tr><th>Port</th><th>Proto</th><th>Bound to</th><th>Process</th><th>Bind scope</th></tr>
+                  <tr><th>{{ tr('Port') }}</th><th>{{ tr('Protocol') }}</th><th>{{ tr('Bound to') }}</th><th>{{ tr('Process') }}</th><th>{{ tr('Bind scope') }}</th></tr>
                 </thead>
                 <tbody>
                   <tr v-for="p in server.ports.slice(0, 30)" :key="p.proto + p.local">
@@ -238,8 +240,8 @@ const swapPct = computed(() => {
                     <td class="mono">{{ p.local }}</td>
                     <td class="mono">{{ p.process ?? '—' }}</td>
                     <td>
-                      <StatusChip v-if="p.exposed" kind="warn" label="All interfaces" />
-                      <span v-else class="chip off">Restricted bind</span>
+                      <StatusChip v-if="p.exposed" kind="warn" :label="tr('All interfaces')" />
+                      <span v-else class="chip off">{{ tr('Restricted bind') }}</span>
                     </td>
                   </tr>
                 </tbody>
@@ -252,7 +254,7 @@ const swapPct = computed(() => {
             <template v-if="server.containers.length">
               <table class="tbl">
                 <thead>
-                  <tr><th>Name</th><th>Image</th><th>Status</th><th class="num">CPU</th><th class="num">MEM</th></tr>
+                  <tr><th>{{ tr('Name') }}</th><th>{{ tr('Image') }}</th><th>{{ tr('Status') }}</th><th class="num">CPU</th><th class="num">{{ tr('MEM') }}</th></tr>
                 </thead>
                 <tbody>
                   <tr v-for="c in server.containers" :key="c.name">
@@ -273,7 +275,7 @@ const swapPct = computed(() => {
           <Panel title="Public entry points" flush>
             <template v-if="server.health.length">
               <table class="tbl">
-                <thead><tr><th>URL</th><th class="num">Status</th><th class="num">Latency</th></tr></thead>
+                <thead><tr><th>URL</th><th class="num">{{ tr('Status') }}</th><th class="num">{{ tr('Latency') }}</th></tr></thead>
                 <tbody>
                   <tr v-for="h in server.health" :key="h.url">
                     <td class="mono">{{ h.url }}</td>
@@ -309,7 +311,7 @@ const swapPct = computed(() => {
           <template v-if="server.disks.length">
             <table class="tbl">
               <thead>
-                <tr><th>Mount</th><th>Source</th><th>Type</th><th class="num">Size</th><th class="num">Used</th><th class="num">Avail</th><th style="width: 24%">Usage</th></tr>
+                <tr><th>{{ tr('Mount') }}</th><th>{{ tr('Source') }}</th><th>{{ tr('Type') }}</th><th class="num">{{ tr('Size') }}</th><th class="num">{{ tr('Used') }}</th><th class="num">{{ tr('Available') }}</th><th style="width: 24%">{{ tr('Usage') }}</th></tr>
               </thead>
               <tbody>
                 <tr v-for="d in server.disks" :key="d.mount">
@@ -336,7 +338,7 @@ const swapPct = computed(() => {
           <Panel title="Docker disk usage (system df)" flush>
             <template v-if="server.dockerUsage">
               <table class="tbl">
-                <thead><tr><th>Category</th><th class="num">Count</th><th class="num">Size</th></tr></thead>
+                <thead><tr><th>{{ tr('Category') }}</th><th class="num">{{ tr('Count') }}</th><th class="num">{{ tr('Size') }}</th></tr></thead>
                 <tbody>
                   <tr v-for="[name, row] in [
                     ['images', server.dockerUsage.images],
@@ -344,7 +346,7 @@ const swapPct = computed(() => {
                     ['volumes', server.dockerUsage.volumes],
                     ['build cache', server.dockerUsage.buildCache],
                   ] as const" :key="name">
-                    <td class="cell-main">{{ name }}</td>
+                    <td class="cell-main">{{ tr(name) }}</td>
                     <td class="num">{{ row.count }}</td>
                     <td class="num">{{ row.size }}</td>
                   </tr>
@@ -358,7 +360,7 @@ const swapPct = computed(() => {
             <template v-if="server.apt">
               <div class="panel-body" style="padding-bottom: 8px">
                 <div class="kv">
-                  <div class="kv-row"><span class="k">Upgradable packages</span><span class="v" :class="server.apt.count > 0 ? 'warn-text' : 'ok-text'">{{ server.apt.count }}</span></div>
+                  <div class="kv-row"><span class="k">{{ tr('Upgradable packages') }}</span><span class="v" :class="server.apt.count > 0 ? 'warn-text' : 'ok-text'">{{ server.apt.count }}</span></div>
                 </div>
                 <div v-if="server.apt.packages.length" class="mono dim" style="margin-top: 8px; font-size: 11.5px; line-height: 1.7">
                   {{ server.apt.packages.join('  ') }}
@@ -377,12 +379,12 @@ const swapPct = computed(() => {
             <template v-if="server.firewall">
               <div class="panel-body" style="padding-bottom: 8px">
                 <div class="kv-row" style="margin-bottom: 6px">
-                  <span class="k">Status</span>
-                  <StatusChip :kind="server.firewall.active ? 'ok' : 'crit'" :label="server.firewall.active ? 'active' : 'inactive'" />
+                  <span class="k">{{ tr('Status') }}</span>
+                  <StatusChip :kind="server.firewall.active ? 'ok' : 'crit'" :label="server.firewall.active ? tr('Active') : tr('Inactive')" />
                 </div>
               </div>
               <table class="tbl">
-                <thead><tr><th>To</th><th>Action</th><th>From</th></tr></thead>
+                <thead><tr><th>{{ tr('To') }}</th><th>{{ tr('Action') }}</th><th>{{ tr('From') }}</th></tr></thead>
                 <tbody>
                   <tr v-for="(r, i) in server.firewall.rules" :key="i">
                     <td class="mono">{{ r.to }}</td>
@@ -401,14 +403,14 @@ const swapPct = computed(() => {
             <template v-if="iptablesBlocked.pkts > 0">
               <div class="panel-body" style="padding-bottom: 8px">
                 <div class="kv">
-                  <div class="kv-row"><span class="k">Dropped / rejected packets</span><span class="v warn-text">{{ iptablesBlocked.pkts.toLocaleString() }}</span></div>
-                  <div class="kv-row"><span class="k">Blocked bytes</span><span class="v">{{ fmtBytes(iptablesBlocked.bytes) }}</span></div>
+                  <div class="kv-row"><span class="k">{{ tr('Dropped / rejected packets') }}</span><span class="v warn-text">{{ iptablesBlocked.pkts.toLocaleString() }}</span></div>
+                  <div class="kv-row"><span class="k">{{ tr('Blocked bytes') }}</span><span class="v">{{ fmtBytes(iptablesBlocked.bytes) }}</span></div>
                 </div>
               </div>
             </template>
             <template v-if="server.firewall && server.firewall.iptables.length">
               <table class="tbl">
-                <thead><tr><th class="num">pkts</th><th class="num">bytes</th><th>target</th><th>proto</th><th>source</th><th>dest</th></tr></thead>
+                <thead><tr><th class="num">{{ tr('Packets') }}</th><th class="num">{{ tr('Bytes') }}</th><th>{{ tr('Target') }}</th><th>{{ tr('Protocol') }}</th><th>{{ tr('Source') }}</th><th>{{ tr('Destination') }}</th></tr></thead>
                 <tbody>
                   <tr v-for="(r, i) in server.firewall.iptables.filter((x) => /^(drop|reject)/i.test(x.target)).slice(0, 12)" :key="i">
                     <td class="num">{{ r.pkts.toLocaleString() }}</td>
@@ -429,7 +431,7 @@ const swapPct = computed(() => {
           <Panel title="Fail2ban jails" flush>
             <template v-if="server.fail2ban.length">
               <table class="tbl">
-                <thead><tr><th>Jail</th><th class="num">Current</th><th class="num">Total</th><th>Banned IPs</th></tr></thead>
+                <thead><tr><th>{{ tr('Jail') }}</th><th class="num">{{ tr('Current') }}</th><th class="num">{{ tr('Total') }}</th><th>{{ tr('Banned IPs') }}</th></tr></thead>
                 <tbody>
                   <tr v-for="j in server.fail2ban" :key="j.name">
                     <td class="mono">{{ j.name }}</td>
@@ -451,12 +453,12 @@ const swapPct = computed(() => {
           <Panel title="SSH auth (last 24h)" flush>
             <template v-if="server.sshLogins.length">
               <table class="tbl">
-                <thead><tr><th>Time</th><th>Result</th><th>User</th><th>From</th></tr></thead>
+                <thead><tr><th>{{ tr('Time') }}</th><th>{{ tr('Result') }}</th><th>{{ tr('User') }}</th><th>{{ tr('From') }}</th></tr></thead>
                 <tbody>
                   <tr v-for="(l, i) in server.sshLogins.slice(-20).reverse()" :key="i">
                     <td class="mono dim">{{ l.time }}</td>
                     <td>
-                      <StatusChip :kind="l.ok ? 'ok' : 'crit'" :label="l.ok ? 'accepted' : 'failed'" />
+                      <StatusChip :kind="l.ok ? 'ok' : 'crit'" :label="l.ok ? tr('Accepted') : tr('Failed')" />
                     </td>
                     <td class="mono">{{ l.user }}</td>
                     <td class="mono dim">{{ l.from }}</td>
@@ -475,7 +477,7 @@ const swapPct = computed(() => {
           <template v-if="server.tlsCerts.length">
             <table class="tbl">
               <thead>
-                <tr><th>Host</th><th>Subject</th><th>Issuer</th><th class="num">Expires</th><th class="num">Days left</th><th>SHA-256 fingerprint</th></tr>
+                <tr><th>{{ tr('Host') }}</th><th>{{ tr('Subject') }}</th><th>{{ tr('Issuer') }}</th><th class="num">{{ tr('Expires') }}</th><th class="num">{{ tr('Days left') }}</th><th>{{ tr('SHA-256 fingerprint') }}</th></tr>
               </thead>
               <tbody>
                 <tr v-for="c in server.tlsCerts" :key="c.host">
@@ -484,7 +486,7 @@ const swapPct = computed(() => {
                   <td class="mono dim">{{ c.issuer }}</td>
                   <td class="num">{{ fmtDateTime(c.notAfter) }}</td>
                   <td class="num">
-                    <StatusChip :kind="tlsLevel(c.daysLeft, thresholds?.tlsMinDays)" :label="c.daysLeft + ' days'" />
+                    <StatusChip :kind="tlsLevel(c.daysLeft, thresholds?.tlsMinDays)" :label="c.daysLeft + ' ' + tr('days')" />
                   </td>
                   <td class="mono">{{ c.fingerprint }}</td>
                 </tr>
@@ -497,7 +499,7 @@ const swapPct = computed(() => {
         <Panel title="SSH host key fingerprints" flush>
           <template v-if="server.fingerprints.length">
             <table class="tbl">
-              <thead><tr><th>Key file</th><th>Algorithm</th><th>Fingerprint</th></tr></thead>
+              <thead><tr><th>{{ tr('Key file') }}</th><th>{{ tr('Algorithm') }}</th><th>{{ tr('Fingerprint') }}</th></tr></thead>
               <tbody>
                 <tr v-for="f in server.fingerprints" :key="f.file">
                   <td class="mono">{{ f.file }}</td>
@@ -518,26 +520,26 @@ const swapPct = computed(() => {
             <div class="panel-body" style="padding-bottom: 8px">
               <div class="kv">
                 <div class="kv-row">
-                  <span class="k">Service health</span>
+                  <span class="k">{{ tr('Service health') }}</span>
                   <StatusChip
                     :kind="server.m3u8.health === '200' ? 'ok' : 'crit'"
-                    :label="server.m3u8.health ?? 'unreachable'"
+                    :label="server.m3u8.health ?? tr('Unreachable')"
                   />
                 </div>
                 <div class="kv-row">
-                  <span class="k">Queue</span>
+                  <span class="k">{{ tr('Queue') }}</span>
                   <span class="v">
                     <span v-for="[status, n] in m3u8Counts" :key="status" style="margin-left: 8px">
                       <span class="chip" :class="m3u8JobKind(status)">{{ status }} {{ n }}</span>
                     </span>
-                    <span v-if="m3u8Counts.length === 0" class="faint">empty</span>
+                    <span v-if="m3u8Counts.length === 0" class="faint">{{ tr('Empty') }}</span>
                   </span>
                 </div>
               </div>
             </div>
             <template v-if="server.m3u8.recent.length">
               <table class="tbl">
-                <thead><tr><th>Title</th><th>Status</th><th class="num">Progress</th><th class="num">Updated</th></tr></thead>
+                <thead><tr><th>{{ tr('Title') }}</th><th>{{ tr('Status') }}</th><th class="num">{{ tr('Progress') }}</th><th class="num">{{ tr('Updated') }}</th></tr></thead>
                 <tbody>
                   <tr v-for="j in server.m3u8.recent" :key="j.title + j.updated">
                     <td class="mono">{{ j.title }}</td>
@@ -559,16 +561,16 @@ const swapPct = computed(() => {
             <div class="panel-body">
               <div class="kv">
                 <div class="kv-row">
-                  <span class="k">Health</span>
+                  <span class="k">{{ tr('Health') }}</span>
                   <StatusChip
                     :kind="server.gitea.health === '200' ? 'ok' : 'crit'"
-                    :label="server.gitea.health ?? 'unreachable'"
+                    :label="server.gitea.health ?? tr('Unreachable')"
                   />
                 </div>
-                <div class="kv-row"><span class="k">Repositories</span><span class="v">{{ server.gitea.repos ?? '—' }}</span></div>
-                <div class="kv-row"><span class="k">Users</span><span class="v">{{ server.gitea.users ?? '—' }}</span></div>
-                <div class="kv-row"><span class="k">Repos active (7d)</span><span class="v">{{ server.gitea.activeWeek ?? '—' }}</span></div>
-                <div class="kv-row"><span class="k">Latest repository update</span><span class="v">{{ fmtEpoch(server.gitea.lastActivity) }}</span></div>
+                <div class="kv-row"><span class="k">{{ tr('Repositories') }}</span><span class="v">{{ server.gitea.repos ?? '—' }}</span></div>
+                <div class="kv-row"><span class="k">{{ tr('Users') }}</span><span class="v">{{ server.gitea.users ?? '—' }}</span></div>
+                <div class="kv-row"><span class="k">{{ tr('Repos active (7d)') }}</span><span class="v">{{ server.gitea.activeWeek ?? '—' }}</span></div>
+                <div class="kv-row"><span class="k">{{ tr('Latest repository update') }}</span><span class="v">{{ fmtEpoch(server.gitea.lastActivity) }}</span></div>
               </div>
             </div>
           </template>
@@ -582,9 +584,9 @@ const swapPct = computed(() => {
           <template v-if="server.caddy">
             <div class="panel-body" style="padding-bottom: 8px">
               <div class="kv">
-                <div class="kv-row"><span class="k">Log size</span><span class="v">{{ fmtBytes(server.caddy.sizeBytes) }}</span></div>
+                <div class="kv-row"><span class="k">{{ tr('Log size') }}</span><span class="v">{{ fmtBytes(server.caddy.sizeBytes) }}</span></div>
                 <div class="kv-row">
-                  <span class="k">Growth</span>
+                  <span class="k">{{ tr('Growth') }}</span>
                   <span class="v" :class="caddyGrowthPerDay > 0 ? 'warn-text' : 'ok-text'">
                     ≈ {{ fmtBytes(caddyGrowthPerDay) }}/day
                   </span>
@@ -605,7 +607,7 @@ const swapPct = computed(() => {
                 />
               </div>
             </template>
-            <div v-if="caddyLoading" class="loading"><span class="spinner" /> loading history…</div>
+            <div v-if="caddyLoading" class="loading"><span class="spinner" /> {{ tr('loading history…') }}</div>
           </template>
           <EmptyState v-else icon="log" message="Caddy log unavailable" />
         </Panel>
@@ -613,7 +615,7 @@ const swapPct = computed(() => {
         <Panel title="Backups" flush>
           <template v-if="server.backup">
             <table class="tbl">
-              <thead><tr><th>Last run</th><th>Next run</th><th class="num">Local copies</th><th class="num">Newest file</th><th>Service</th></tr></thead>
+              <thead><tr><th>{{ tr('Last run') }}</th><th>{{ tr('Next run') }}</th><th class="num">{{ tr('Local copies') }}</th><th class="num">{{ tr('Newest file') }}</th><th>{{ tr('Service') }}</th></tr></thead>
               <tbody>
                 <tr>
                   <td class="mono" :class="server.backup.failed ? 'crit-text' : ''">{{ server.backup.lastRun ?? '—' }}</td>
@@ -623,7 +625,7 @@ const swapPct = computed(() => {
                   <td>
                     <StatusChip
                       :kind="server.backup.failed === true ? 'crit' : server.backup.failed === false ? 'ok' : 'off'"
-                      :label="server.backup.failed === true ? 'failed' : server.backup.failed === false ? 'healthy' : 'unknown'"
+                      :label="server.backup.failed === true ? tr('Failed') : server.backup.failed === false ? tr('Healthy') : tr('Unknown')"
                     />
                   </td>
                 </tr>
@@ -635,7 +637,7 @@ const swapPct = computed(() => {
 
         <Panel v-if="sectionErrors.length" title="Unavailable sections" flush>
           <table class="tbl">
-            <thead><tr><th>Section</th><th>Reason</th></tr></thead>
+            <thead><tr><th>{{ tr('Section') }}</th><th>{{ tr('Reason') }}</th></tr></thead>
             <tbody>
               <tr v-for="[name, why] in sectionErrors" :key="name">
                 <td class="mono">{{ name }}</td>
@@ -648,7 +650,7 @@ const swapPct = computed(() => {
     </template>
 
     <div v-else class="panel">
-      <div class="loading"><span class="spinner" /> loading server…</div>
+      <div class="loading"><span class="spinner" /> {{ tr('loading server…') }}</div>
     </div>
   </div>
 </template>

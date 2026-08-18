@@ -8,6 +8,7 @@
 
 import { z, type ZodType } from 'zod'
 import { invoke } from '@tauri-apps/api/core'
+import { MonitorConfigSchema, type MonitorConfig } from '../types'
 
 const BackendInfoSchema = z.strictObject({
   port: z.number().int().min(1).max(65535),
@@ -68,4 +69,19 @@ export async function openWebSocket(path: string): Promise<WebSocket> {
   const separator = path.includes('?') ? '&' : '?'
   const url = 'ws://127.0.0.1:' + info.port + path + separator + 'token=' + encodeURIComponent(info.token)
   return new WebSocket(url)
+}
+
+export async function getMonitorConfig(): Promise<MonitorConfig> {
+  if (!window.__TAURI_INTERNALS__) {
+    throw new Error('Protected configuration is available only in the desktop application')
+  }
+  return decode('get_monitor_config', MonitorConfigSchema, await invoke('get_monitor_config'))
+}
+
+export async function saveMonitorConfig(config: MonitorConfig): Promise<void> {
+  if (!window.__TAURI_INTERNALS__) {
+    throw new Error('Protected configuration is available only in the desktop application')
+  }
+  const validated = decode('save_monitor_config', MonitorConfigSchema, config)
+  await invoke('save_monitor_config', { config: validated })
 }

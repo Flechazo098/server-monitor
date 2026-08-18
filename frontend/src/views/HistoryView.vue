@@ -9,8 +9,10 @@ import LineChart from '../components/LineChart.vue'
 import BarsChart from '../components/BarsChart.vue'
 import Panel from '../components/Panel.vue'
 import EmptyState from '../components/EmptyState.vue'
+import { useUiText } from '../i18n'
 
 const store = useServersStore()
+const tr = useUiText()
 const serverId = ref('')
 const hours = ref(24)
 const metric = ref<'cpu' | 'mem' | 'disk' | 'load' | 'net' | 'rx' | 'tx'>('cpu')
@@ -40,13 +42,13 @@ const series = computed(() => {
   switch (metric.value) {
     case 'cpu':
       return [
-        { name: 'total', data: rows.value.map((m) => [m.timestamp, m.cpu] as [string, number]), color: CHART.cpu, area: true, unit: '%' as const },
-        { name: 'user', data: rows.value.map((m) => [m.timestamp, m.cpuUser] as [string, number]), color: CHART.cpuUser, unit: '%' as const },
-        { name: 'system', data: rows.value.map((m) => [m.timestamp, m.cpuSystem] as [string, number]), color: CHART.cpuSystem, unit: '%' as const },
+        { name: tr('total'), data: rows.value.map((m) => [m.timestamp, m.cpu] as [string, number]), color: CHART.cpu, area: true, unit: '%' as const },
+        { name: tr('user'), data: rows.value.map((m) => [m.timestamp, m.cpuUser] as [string, number]), color: CHART.cpuUser, unit: '%' as const },
+        { name: tr('system'), data: rows.value.map((m) => [m.timestamp, m.cpuSystem] as [string, number]), color: CHART.cpuSystem, unit: '%' as const },
         { name: 'iowait', data: rows.value.map((m) => [m.timestamp, m.cpuIowait] as [string, number]), color: CHART.cpuIowait, unit: '%' as const },
       ]
     case 'mem':
-      return [{ name: 'memory used', data: rows.value.map((m) => [m.timestamp, m.mem] as [string, number]), color: CHART.mem, area: true, unit: '%' as const }]
+      return [{ name: tr('memory used'), data: rows.value.map((m) => [m.timestamp, m.mem] as [string, number]), color: CHART.mem, area: true, unit: '%' as const }]
     case 'disk':
       return [{ name: 'disk /', data: rows.value.map((m) => [m.timestamp, m.disk] as [string, number]), color: CHART.disk, area: true, unit: '%' as const }]
     case 'load':
@@ -84,10 +86,10 @@ watch(
   <div>
     <div class="page-head">
       <div>
-        <h1 class="page-title">History</h1>
-        <p class="page-sub">{{ hours }}h window · {{ rows.length }} persisted samples</p>
+        <h1 class="page-title">{{ tr('History') }}</h1>
+        <p class="page-sub">{{ hours }}h {{ tr('window') }} · {{ rows.length }} {{ tr('persisted samples') }}</p>
       </div>
-      <div class="page-side mono">{{ rows.length }} samples</div>
+      <div class="page-side mono">{{ rows.length }} {{ tr('samples') }}</div>
     </div>
 
     <div class="filter-bar">
@@ -95,28 +97,28 @@ watch(
         <option v-for="s in store.servers" :key="s.id" :value="s.id">{{ s.name }}</option>
       </select>
       <select v-model.number="hours">
-        <option :value="1">Last hour</option>
-        <option :value="6">Last 6 hours</option>
-        <option :value="24">Last 24 hours</option>
-        <option :value="168">Last 7 days</option>
+        <option :value="1">{{ tr('Last hour') }}</option>
+        <option :value="6">{{ tr('Last 6 hours') }}</option>
+        <option :value="24">{{ tr('Last 24 hours') }}</option>
+        <option :value="168">{{ tr('Last 7 days') }}</option>
       </select>
       <select v-model="metric">
         <option value="cpu">CPU %</option>
-        <option value="mem">Memory %</option>
+        <option value="mem">{{ tr('Memory') }} %</option>
         <option value="disk">Disk / %</option>
-        <option value="load">Load average</option>
-        <option value="net">Net throughput</option>
-        <option value="rx">Traffic rx (today)</option>
-        <option value="tx">Traffic tx (today)</option>
+        <option value="load">{{ tr('Load average') }}</option>
+        <option value="net">{{ tr('Net throughput') }}</option>
+        <option value="rx">{{ tr('Traffic rx (today)') }}</option>
+        <option value="tx">{{ tr('Traffic tx (today)') }}</option>
       </select>
-      <button class="btn" @click="load"><UiIcon name="refresh" :size="13" /> Refresh</button>
+      <button class="btn" @click="load"><UiIcon name="refresh" :size="13" /> {{ tr('Refresh') }}</button>
     </div>
 
     <div v-if="error" class="error-box">{{ error }}</div>
 
     <div class="stack">
       <Panel title="Metric history" flush>
-        <div v-if="loading && rows.length === 0" class="loading"><span class="spinner" /> loading…</div>
+        <div v-if="loading && rows.length === 0" class="loading"><span class="spinner" /> {{ tr('loading…') }}</div>
         <template v-else-if="rows.length">
           <div class="panel-body"><LineChart :series="series" height="260px" :min="['cpu', 'mem', 'disk', 'net'].includes(metric) ? 0 : null" :max="['cpu', 'mem', 'disk'].includes(metric) ? 100 : null" /></div>
         </template>

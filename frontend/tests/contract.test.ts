@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
-import { ContractBundleSchema, MetricsSchema } from '../src/types'
+import { ContractBundleSchema, MetricsSchema, MonitorConfigSchema } from '../src/types'
 
 const fixturePath = process.env.MONITOR_CONTRACT_FIXTURE ?? '.contract/haskell.json'
 const fixture: unknown = JSON.parse(readFileSync(fixturePath, 'utf8'))
@@ -19,5 +19,15 @@ describe('Haskell -> JSON -> TypeScript contract', () => {
     const { cpu: renamedValue, ...withoutCpu } = metrics
     const renamed = { ...withoutCpu, cpuUsage: renamedValue }
     expect(MetricsSchema.safeParse(renamed).success).toBe(false)
+  })
+
+  it('proves the editable configuration boundary and rejects renamed fields', () => {
+    const bundle = ContractBundleSchema.parse(fixture)
+    const { sshHost: renamedValue, ...withoutSshHost } = bundle.config.servers[0]!
+    const renamed = {
+      ...bundle.config,
+      servers: [{ ...withoutSshHost, host: renamedValue }],
+    }
+    expect(MonitorConfigSchema.safeParse(renamed).success).toBe(false)
   })
 })
